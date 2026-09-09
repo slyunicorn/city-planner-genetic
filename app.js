@@ -10,42 +10,56 @@
 const map =
     document.getElementById("map");
 
+const viewport =
+    document.getElementById("viewport");
+
+const world =
+    document.getElementById("world");
+
 const svg =
     d3.select("#viz");
+
+
+// ============================================================
+// WORLD DIMENSIONS
+// ============================================================
+
+let WORLD_WIDTH = 0;
+
+let WORLD_HEIGHT = 0;
+
+
+// ============================================================
+// CAMERA
+// ============================================================
+
+let zoomScale = 1;
+
+let cameraX = 0;
+
+let cameraY = 0;
+
+
+// ============================================================
+// POINT PARAMETERS
+// ============================================================
+
+const DEFAULT_R = 18;
+
+const DEFAULT_K = 30;
 
 
 // ============================================================
 // STATE
 // ============================================================
 
-// These are determined from the image itself.
-
-let WORLD_WIDTH = 0;
-let WORLD_HEIGHT = 0;
-
-
-// Original Poisson distribution.
-// NEVER delete these.
-
 let allPoints = [];
-
-
-// Points currently inside the city.
 
 let cityPoints = [];
 
-
-// User-selected city boundary.
-
 let boundary = [];
 
-
-// Has the city been closed?
-
 let cityClosed = false;
-
-
-// Is Voronoi currently visible?
 
 let showVoronoi = false;
 
@@ -91,14 +105,16 @@ const vertexLayer =
 
 
 // ============================================================
-// GET PARAMETERS
+// R / K
 // ============================================================
 
 function getR() {
 
     return Number(
         document
-            .getElementById("rSlider")
+            .getElementById(
+                "rSlider"
+            )
             .value
     );
 }
@@ -108,31 +124,33 @@ function getK() {
 
     return Number(
         document
-            .getElementById("kSlider")
+            .getElementById(
+                "kSlider"
+            )
             .value
     );
 }
 
 
-// ============================================================
-// UPDATE SLIDER LABELS
-// ============================================================
-
 function updateSliderLabels() {
 
     document
-        .getElementById("rValue")
+        .getElementById(
+            "rValue"
+        )
         .textContent = getR();
 
 
     document
-        .getElementById("kValue")
+        .getElementById(
+            "kValue"
+        )
         .textContent = getK();
 }
 
 
 // ============================================================
-// FAST POISSON DISC SAMPLING
+// POISSON DISC SAMPLING
 // ============================================================
 
 function poissonDiscSampling(
@@ -142,24 +160,22 @@ function poissonDiscSampling(
     k
 ) {
 
-    /*
-        Cell size guarantees that each grid cell
-        can contain at most one point.
-    */
-
     const cellSize =
-        radius / Math.sqrt(2);
+        radius /
+        Math.sqrt(2);
 
 
     const gridWidth =
         Math.ceil(
-            width / cellSize
+            width /
+            cellSize
         );
 
 
     const gridHeight =
         Math.ceil(
-            height / cellSize
+            height /
+            cellSize
         );
 
 
@@ -175,21 +191,22 @@ function poissonDiscSampling(
     const active = [];
 
 
-    // --------------------------------------------------------
-    // Grid index
-    // --------------------------------------------------------
-
-    function gridIndex(x, y) {
+    function gridIndex(
+        x,
+        y
+    ) {
 
         const gx =
             Math.floor(
-                x / cellSize
+                x /
+                cellSize
             );
 
 
         const gy =
             Math.floor(
-                y / cellSize
+                y /
+                cellSize
             );
 
 
@@ -212,11 +229,9 @@ function poissonDiscSampling(
     }
 
 
-    // --------------------------------------------------------
-    // Check candidate
-    // --------------------------------------------------------
-
-    function isValid(point) {
+    function isValid(
+        point
+    ) {
 
         if (
             point.x < 0 ||
@@ -231,21 +246,17 @@ function poissonDiscSampling(
 
         const gx =
             Math.floor(
-                point.x / cellSize
+                point.x /
+                cellSize
             );
 
 
         const gy =
             Math.floor(
-                point.y / cellSize
+                point.y /
+                cellSize
             );
 
-
-        /*
-            Only inspect nearby cells.
-
-            This is what makes the algorithm fast.
-        */
 
         for (
             let yy = gy - 2;
@@ -294,13 +305,9 @@ function poissonDiscSampling(
                     neighbor.y;
 
 
-                const distanceSquared =
-                    dx * dx +
-                    dy * dy;
-
-
                 if (
-                    distanceSquared <
+                    dx * dx +
+                    dy * dy <
                     radius * radius
                 ) {
 
@@ -314,11 +321,9 @@ function poissonDiscSampling(
     }
 
 
-    // --------------------------------------------------------
-    // Add point
-    // --------------------------------------------------------
-
-    function addPoint(point) {
+    function addPoint(
+        point
+    ) {
 
         points.push(point);
 
@@ -332,16 +337,17 @@ function poissonDiscSampling(
             );
 
 
-        if (index !== -1) {
+        if (
+            index !== -1
+        ) {
 
-            grid[index] = point;
+            grid[index] =
+                point;
         }
     }
 
 
-    // --------------------------------------------------------
-    // Initial random point
-    // --------------------------------------------------------
+    // Initial point
 
     addPoint({
 
@@ -356,12 +362,10 @@ function poissonDiscSampling(
     });
 
 
-    // --------------------------------------------------------
     // Bridson algorithm
-    // --------------------------------------------------------
 
     while (
-        active.length > 0
+        active.length
     ) {
 
         const activeIndex =
@@ -372,14 +376,14 @@ function poissonDiscSampling(
 
 
         const current =
-            active[activeIndex];
+            active[
+                activeIndex
+            ];
 
 
         let found =
             false;
 
-
-        // K attempts
 
         for (
             let attempt = 0;
@@ -392,16 +396,6 @@ function poissonDiscSampling(
                 Math.PI *
                 2;
 
-
-            /*
-                Generate point between:
-
-                    R
-
-                and
-
-                    2R
-            */
 
             const distance =
                 radius *
@@ -427,7 +421,9 @@ function poissonDiscSampling(
 
 
             if (
-                isValid(candidate)
+                isValid(
+                    candidate
+                )
             ) {
 
                 addPoint(
@@ -441,10 +437,6 @@ function poissonDiscSampling(
         }
 
 
-        // ----------------------------------------------------
-        // No valid point found
-        // ----------------------------------------------------
-
         if (!found) {
 
             active.splice(
@@ -456,41 +448,6 @@ function poissonDiscSampling(
 
 
     return points;
-}
-
-
-// ============================================================
-// GENERATE POINTS
-// ============================================================
-
-function generatePoints() {
-
-    const R = getR();
-
-    const K = getK();
-
-
-    updateSliderLabels();
-
-
-    /*
-        Generate using the ACTUAL IMAGE dimensions.
-    */
-
-    allPoints =
-        poissonDiscSampling(
-            WORLD_WIDTH,
-            WORLD_HEIGHT,
-            R,
-            K
-        );
-
-
-    updateCityPoints();
-
-    draw();
-
-    updateStatus();
 }
 
 
@@ -545,7 +502,9 @@ function pointInsidePolygon(
             );
 
 
-        if (intersects) {
+        if (
+            intersects
+        ) {
 
             inside = !inside;
         }
@@ -557,7 +516,7 @@ function pointInsidePolygon(
 
 
 // ============================================================
-// FILTER CITY POINTS
+// UPDATE CITY POINTS
 // ============================================================
 
 function updateCityPoints() {
@@ -601,9 +560,13 @@ function createBoundaryPath() {
     const line =
         d3.line()
 
-            .x(d => d.x)
+            .x(
+                d => d.x
+            )
 
-            .y(d => d.y)
+            .y(
+                d => d.y
+            )
 
             .curve(
 
@@ -621,7 +584,9 @@ function createBoundaryPath() {
             );
 
 
-    return line(boundary);
+    return line(
+        boundary
+    );
 }
 
 
@@ -670,10 +635,6 @@ function drawBoundary() {
     }
 
 
-    // --------------------------------------------------------
-    // Vertices
-    // --------------------------------------------------------
-
     const vertices =
         vertexLayer
             .selectAll("circle")
@@ -693,8 +654,8 @@ function drawBoundary() {
             "r",
             (d, i) =>
                 i === 0
-                    ? 8
-                    : 6
+                    ? 7
+                    : 5
         )
 
         .attr(
@@ -709,7 +670,7 @@ function drawBoundary() {
 
 
     // --------------------------------------------------------
-    // Drag
+    // Drag boundary vertices
     // --------------------------------------------------------
 
     if (!cityClosed) {
@@ -727,7 +688,6 @@ function drawBoundary() {
                             .raise();
                     }
                 )
-
 
                 .on(
                     "drag",
@@ -772,12 +732,14 @@ function drawBoundary() {
                     }
                 )
 
-
                 .on(
                     "end",
                     function () {
 
+                        updateCityPoints();
+
                         draw();
+
                     }
                 )
         );
@@ -796,16 +758,6 @@ function drawPoints() {
         .remove();
 
 
-    /*
-        Before city is closed:
-
-            show all points
-
-        After city is closed:
-
-            show only city points
-    */
-
     const pointsToDraw =
         cityClosed
             ? cityPoints
@@ -814,7 +766,9 @@ function drawPoints() {
 
     pointLayer
         .selectAll("circle")
-        .data(pointsToDraw)
+        .data(
+            pointsToDraw
+        )
         .enter()
         .append("circle")
 
@@ -835,11 +789,28 @@ function drawPoints() {
             d => d.y
         )
 
+        /*
+            IMPORTANT:
+
+            Radius is expressed in SCREEN pixels.
+
+            Since the entire world scales when zooming,
+            we compensate by dividing by zoomScale.
+
+            So:
+
+                zoom in 2x
+                    radius = original / 2
+
+                zoom in 4x
+                    radius = original / 4
+        */
+
         .attr(
             "r",
             cityClosed
-                ? 3
-                : 2.5
+                ? 2.5 / zoomScale
+                : 2 / zoomScale
         );
 }
 
@@ -855,8 +826,6 @@ function drawVoronoi() {
         .remove();
 
 
-    // Remove old clipping
-
     voronoiLayer
         .attr(
             "clip-path",
@@ -869,14 +838,6 @@ function drawVoronoi() {
         return;
     }
 
-
-    /*
-        Before closing city:
-            Voronoi of ALL points.
-
-        After closing city:
-            Voronoi of CITY points.
-    */
 
     const points =
         cityClosed
@@ -892,10 +853,6 @@ function drawVoronoi() {
     }
 
 
-    // --------------------------------------------------------
-    // Delaunay
-    // --------------------------------------------------------
-
     const delaunay =
         d3.Delaunay.from(
             points,
@@ -905,10 +862,6 @@ function drawVoronoi() {
             d => d.y
         );
 
-
-    // --------------------------------------------------------
-    // Voronoi
-    // --------------------------------------------------------
 
     const voronoi =
         delaunay.voronoi([
@@ -922,9 +875,9 @@ function drawVoronoi() {
         ]);
 
 
-    // ========================================================
-    // CITY CLIPPING
-    // ========================================================
+    // --------------------------------------------------------
+    // Clip to city
+    // --------------------------------------------------------
 
     if (
         cityClosed &&
@@ -940,27 +893,24 @@ function drawVoronoi() {
         ) {
 
             defs =
-                svg.append("defs");
+                svg.append(
+                    "defs"
+                );
         }
 
-
-        // Remove old clip
 
         defs
             .select("#cityClip")
             .remove();
 
 
-        const clip =
-            defs
-                .append("clipPath")
-                .attr(
-                    "id",
-                    "cityClip"
-                );
+        defs
+            .append("clipPath")
+            .attr(
+                "id",
+                "cityClip"
+            )
 
-
-        clip
             .append("path")
             .attr(
                 "d",
@@ -977,7 +927,7 @@ function drawVoronoi() {
 
 
     // --------------------------------------------------------
-    // Render cells
+    // Draw cells
     // --------------------------------------------------------
 
     voronoiLayer
@@ -1014,90 +964,225 @@ function draw() {
 
 
 // ============================================================
-// SVG CLICK
+// CENTER WORLD
 // ============================================================
 
-svg.on(
-    "click",
-    function (event) {
+function centerWorld() {
 
-        if (cityClosed) {
-
-            return;
-        }
+    const viewportWidth =
+        viewport.clientWidth;
 
 
-        /*
-            Don't create a new vertex if the user
-            clicked an existing vertex.
-        */
-
-        if (
-            event.target.tagName ===
-            "circle"
-        ) {
-
-            return;
-        }
+    const viewportHeight =
+        viewport.clientHeight;
 
 
-        const [
-            x,
-            y
-        ] =
-            d3.pointer(
-                event,
-                this
-            );
+    /*
+        Put the CENTER of the image at
+        the CENTER of the screen.
+    */
+
+    cameraX =
+        (
+            viewportWidth -
+            WORLD_WIDTH * zoomScale
+        ) / 2;
 
 
-        // ----------------------------------------------------
-        // Close by clicking first point
-        // ----------------------------------------------------
-
-        if (
-            boundary.length >= 3
-        ) {
-
-            const first =
-                boundary[0];
+    cameraY =
+        (
+            viewportHeight -
+            WORLD_HEIGHT * zoomScale
+        ) / 2;
 
 
-            const distance =
-                Math.hypot(
-                    x - first.x,
-                    y - first.y
-                );
+    updateCamera();
+}
 
 
-            if (
-                distance < 18
-            ) {
+// ============================================================
+// APPLY CAMERA
+// ============================================================
 
-                closeCity();
+function updateCamera() {
 
-                return;
-            }
-        }
+    world.style.transform =
 
-
-        // ----------------------------------------------------
-        // Add boundary point
-        // ----------------------------------------------------
-
-        boundary.push({
-
-            x,
-            y
-
-        });
+        `translate(
+            ${cameraX}px,
+            ${cameraY}px
+        )
+        scale(
+            ${zoomScale}
+        )`;
 
 
-        drawBoundary();
+    /*
+        Point radii and other screen-space
+        properties depend on zoom.
+    */
 
-        updateStatus();
+    drawPoints();
+}
+
+
+// ============================================================
+// ZOOM
+// ============================================================
+
+function zoomAt(
+    mouseX,
+    mouseY,
+    factor
+) {
+
+    const oldScale =
+        zoomScale;
+
+
+    const newScale =
+        Math.max(
+            0.1,
+            Math.min(
+                20,
+                zoomScale *
+                factor
+            )
+        );
+
+
+    if (
+        newScale === oldScale
+    ) {
+
+        return;
+    }
+
+
+    /*
+        World coordinate underneath
+        mouse cursor before zoom.
+    */
+
+    const worldX =
+        (
+            mouseX -
+            cameraX
+        )
+        /
+        oldScale;
+
+
+    const worldY =
+        (
+            mouseY -
+            cameraY
+        )
+        /
+        oldScale;
+
+
+    zoomScale =
+        newScale;
+
+
+    /*
+        Keep the same world coordinate
+        underneath the cursor.
+    */
+
+    cameraX =
+        mouseX -
+        worldX *
+        zoomScale;
+
+
+    cameraY =
+        mouseY -
+        worldY *
+        zoomScale;
+
+
+    updateCamera();
+
+    drawVoronoi();
+
+    drawBoundary();
+}
+
+
+// ============================================================
+// MOUSE WHEEL ZOOM
+// ============================================================
+
+viewport.addEventListener(
+    "wheel",
+    event => {
+
+        event.preventDefault();
+
+
+        const rect =
+            viewport.getBoundingClientRect();
+
+
+        const mouseX =
+            event.clientX -
+            rect.left;
+
+
+        const mouseY =
+            event.clientY -
+            rect.top;
+
+
+        const factor =
+            event.deltaY < 0
+                ? 1.15
+                : 1 / 1.15;
+
+
+        zoomAt(
+            mouseX,
+            mouseY,
+            factor
+        );
+    },
+    {
+        passive: false
     }
 );
+
+
+// ============================================================
+// GENERATE POINTS
+// ============================================================
+
+function generatePoints() {
+
+    updateSliderLabels();
+
+
+    allPoints =
+        poissonDiscSampling(
+
+            WORLD_WIDTH,
+
+            WORLD_HEIGHT,
+
+            getR(),
+
+            getK()
+
+        );
+
+
+    updateCityPoints();
+
+    draw();
+
+    updateStatus();
+}
 
 
 // ============================================================
@@ -1151,55 +1236,104 @@ function reset() {
         .checked = false;
 
 
+    zoomScale = 1;
+
+
+    centerWorld();
+
     generatePoints();
 }
 
 
 // ============================================================
-// STATUS
+// SVG CLICK
 // ============================================================
 
-function updateStatus() {
+svg.on(
+    "click",
+    function (event) {
 
-    let text =
-        `R=${getR()} · ` +
-        `K=${getK()} · ` +
-        `${allPoints.length} Poisson points`;
+        if (cityClosed) {
+
+            return;
+        }
 
 
-    if (cityClosed) {
+        if (
+            event.target.tagName ===
+            "circle"
+        ) {
 
-        text +=
-            ` · ${cityPoints.length} inside city`;
+            return;
+        }
+
+
+        const [
+            x,
+            y
+        ] =
+            d3.pointer(
+                event,
+                this
+            );
+
+
+        // ----------------------------------------------------
+        // Close by clicking first vertex
+        // ----------------------------------------------------
+
+        if (
+            boundary.length >= 3
+        ) {
+
+            const first =
+                boundary[0];
+
+
+            const distance =
+                Math.hypot(
+                    x - first.x,
+                    y - first.y
+                );
+
+
+            if (
+                distance < 18
+            ) {
+
+                closeCity();
+
+                return;
+            }
+        }
+
+
+        boundary.push({
+
+            x,
+            y
+
+        });
+
+
+        drawBoundary();
+
+        updateStatus();
     }
-
-
-    if (showVoronoi) {
-
-        text +=
-            ` · Voronoi ON`;
-    }
-
-
-    document
-        .getElementById(
-            "status"
-        )
-        .textContent = text;
-}
+);
 
 
 // ============================================================
-// SLIDER EVENTS
+// SLIDERS
 // ============================================================
 
 document
-    .getElementById("rSlider")
+    .getElementById(
+        "rSlider"
+    )
     .addEventListener(
         "input",
-        function () {
-
-            updateSliderLabels();
+        () => {
 
             generatePoints();
         }
@@ -1207,12 +1341,12 @@ document
 
 
 document
-    .getElementById("kSlider")
+    .getElementById(
+        "kSlider"
+    )
     .addEventListener(
         "input",
-        function () {
-
-            updateSliderLabels();
+        () => {
 
             generatePoints();
         }
@@ -1220,7 +1354,7 @@ document
 
 
 // ============================================================
-// BUTTON EVENTS
+// BUTTONS
 // ============================================================
 
 document
@@ -1277,18 +1411,214 @@ document
 
 
 // ============================================================
-// KEYBOARD RESET
+// STATUS
+// ============================================================
+
+function updateStatus() {
+
+    let text =
+
+        `R=${getR()} · ` +
+        `K=${getK()} · ` +
+        `${allPoints.length} points`;
+
+
+    if (cityClosed) {
+
+        text +=
+            ` · ${cityPoints.length} inside city`;
+    }
+
+
+    if (showVoronoi) {
+
+        text +=
+            ` · Voronoi ON`;
+    }
+
+
+    text +=
+        ` · Zoom ${zoomScale.toFixed(2)}×`;
+
+
+    document
+        .getElementById(
+            "status"
+        )
+        .textContent = text;
+}
+
+
+// ============================================================
+// DRAGGABLE CONTROL WINDOW
+// ============================================================
+
+const controls =
+    document.getElementById(
+        "controls"
+    );
+
+
+const header =
+    document.getElementById(
+        "controls-header"
+    );
+
+
+let draggingControls =
+    false;
+
+
+let dragOffsetX = 0;
+
+let dragOffsetY = 0;
+
+
+header.addEventListener(
+    "pointerdown",
+    event => {
+
+        /*
+            Don't start dragging if the user
+            somehow starts on a button/input.
+        */
+
+        if (
+            event.target.closest(
+                "button, input, label"
+            )
+        ) {
+
+            return;
+        }
+
+
+        draggingControls =
+            true;
+
+
+        const rect =
+            controls.getBoundingClientRect();
+
+
+        dragOffsetX =
+            event.clientX -
+            rect.left;
+
+
+        dragOffsetY =
+            event.clientY -
+            rect.top;
+
+
+        header.setPointerCapture(
+            event.pointerId
+        );
+    }
+);
+
+
+header.addEventListener(
+    "pointermove",
+    event => {
+
+        if (!draggingControls) {
+
+            return;
+        }
+
+
+        let x =
+            event.clientX -
+            dragOffsetX;
+
+
+        let y =
+            event.clientY -
+            dragOffsetY;
+
+
+        /*
+            Keep the panel on screen.
+        */
+
+        const maxX =
+            window.innerWidth -
+            controls.offsetWidth;
+
+
+        const maxY =
+            window.innerHeight -
+            controls.offsetHeight;
+
+
+        x =
+            Math.max(
+                0,
+                Math.min(
+                    maxX,
+                    x
+                )
+            );
+
+
+        y =
+            Math.max(
+                0,
+                Math.min(
+                    maxY,
+                    y
+                )
+            );
+
+
+        controls.style.left =
+            `${x}px`;
+
+
+        controls.style.top =
+            `${y}px`;
+    }
+);
+
+
+header.addEventListener(
+    "pointerup",
+    event => {
+
+        draggingControls =
+            false;
+
+
+        try {
+
+            header.releasePointerCapture(
+                event.pointerId
+            );
+
+        } catch (_) {}
+    }
+);
+
+
+// ============================================================
+// WINDOW RESIZE
 // ============================================================
 
 window.addEventListener(
-    "keydown",
-    event => {
+    "resize",
+    () => {
+
+        /*
+            Re-center only if the user hasn't
+            meaningfully zoomed/panned.
+        */
 
         if (
-            event.key.toLowerCase() === "r"
+            zoomScale === 1
         ) {
 
-            reset();
+            centerWorld();
         }
     }
 );
@@ -1299,11 +1629,6 @@ window.addEventListener(
 // ============================================================
 
 function initializeFromImage() {
-
-    /*
-        Get the REAL pixel dimensions of
-        altitude-map.png.
-    */
 
     WORLD_WIDTH =
         map.naturalWidth;
@@ -1319,7 +1644,7 @@ function initializeFromImage() {
     ) {
 
         console.error(
-            "Could not determine image dimensions."
+            "Invalid altitude map dimensions."
         );
 
         return;
@@ -1327,7 +1652,19 @@ function initializeFromImage() {
 
 
     // --------------------------------------------------------
-    // SVG uses exactly the same coordinate system
+    // Set actual image dimensions
+    // --------------------------------------------------------
+
+    map.style.width =
+        `${WORLD_WIDTH}px`;
+
+
+    map.style.height =
+        `${WORLD_HEIGHT}px`;
+
+
+    // --------------------------------------------------------
+    // Set SVG dimensions
     // --------------------------------------------------------
 
     svg
@@ -1348,18 +1685,14 @@ function initializeFromImage() {
 
 
     // --------------------------------------------------------
-    // Image uses EXACT pixel dimensions
+    // Center everything
     // --------------------------------------------------------
 
-    map.style.width =
-        `${WORLD_WIDTH}px`;
-
-    map.style.height =
-        `${WORLD_HEIGHT}px`;
+    centerWorld();
 
 
     // --------------------------------------------------------
-    // Generate points
+    // Generate
     // --------------------------------------------------------
 
     generatePoints();
@@ -1367,10 +1700,12 @@ function initializeFromImage() {
 
 
 // ============================================================
-// WAIT FOR IMAGE
+// WAIT FOR MAP
 // ============================================================
 
-if (map.complete) {
+if (
+    map.complete
+) {
 
     initializeFromImage();
 

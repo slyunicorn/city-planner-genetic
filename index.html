@@ -21,31 +21,40 @@
 
 <body>
 
-    <!-- ================================================= -->
-    <!-- MAP -->
-    <!-- ================================================= -->
+    <div id="viewport">
 
-    <img
-        id="map"
-        src="altitude-map.png"
-        alt="Altitude map"
-    >
+        <div id="world">
+
+            <img
+                id="map"
+                src="altitude-map.png"
+                alt="Altitude map"
+            >
+
+            <svg id="viz"></svg>
+
+        </div>
+
+    </div>
 
 
-    <!-- ================================================= -->
-    <!-- D3 SVG -->
-    <!-- ================================================= -->
-
-    <svg id="viz"></svg>
-
-
-    <!-- ================================================= -->
-    <!-- CONTROLS -->
-    <!-- ================================================= -->
+    <!-- ================================================ -->
+    <!-- FLOATING CONTROL PANEL                            -->
+    <!-- ================================================ -->
 
     <div id="controls">
 
-        <strong>AI City Planner</strong>
+        <div id="controls-header">
+
+            <strong>
+                AI City Planner
+            </strong>
+
+            <span id="dragHint">
+                ⋮⋮
+            </span>
+
+        </div>
 
 
         <!-- R -->
@@ -60,7 +69,7 @@
             <input
                 id="rSlider"
                 type="range"
-                min="5"
+                min="3"
                 max="100"
                 value="18"
                 step="1"
