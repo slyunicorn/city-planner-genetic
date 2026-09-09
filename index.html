@@ -13,37 +13,29 @@
 
 <div id="viewport">
 
-    <!-- Everything in the map lives inside this SVG -->
-    <svg id="viz">
-        <defs>
-            <clipPath id="cityClip">
-                <path id="cityClipPath"></path>
-            </clipPath>
-        </defs>
+    <!-- Everything inside this moves/zooms together -->
+    <div id="world">
 
-        <!-- Altitude map -->
-        <image id="map"
-               href="altitude-map.png"
-               preserveAspectRatio="none">
-        </image>
+        <img id="map" src="./altitude-map.png" alt="Altitude map">
 
-        <!-- Voronoi -->
-        <g id="voronoiLayer"></g>
+        <svg id="viz">
+            <defs>
+                <clipPath id="cityClip">
+                    <path id="cityClipPath"></path>
+                </clipPath>
+            </defs>
 
-        <!-- City boundary -->
-        <g id="boundaryLayer"></g>
+            <g id="voronoiLayer"></g>
+            <g id="boundaryLayer"></g>
+            <g id="pointLayer"></g>
+            <g id="vertexLayer"></g>
+        </svg>
 
-        <!-- Points -->
-        <g id="pointLayer"></g>
-
-        <!-- Boundary editing vertices -->
-        <g id="vertexLayer"></g>
-    </svg>
+    </div>
 
 </div>
 
 
-<!-- Floating controls -->
 <div id="controls">
 
     <div id="controls-header">
@@ -52,9 +44,8 @@
     </div>
 
     <div class="control-section">
-
         <label>
-            R:
+            <span>R</span>
             <span id="rValue">18</span>
         </label>
 
@@ -65,14 +56,11 @@
             max="100"
             value="18"
         >
-
     </div>
 
-
     <div class="control-section">
-
         <label>
-            K:
+            <span>K</span>
             <span id="kValue">30</span>
         </label>
 
@@ -83,9 +71,7 @@
             max="100"
             value="30"
         >
-
     </div>
-
 
     <button id="generateBtn">
         Generate Poisson Points
@@ -99,21 +85,17 @@
         Reset
     </button>
 
-
     <label class="checkbox-row">
-        <input
-            id="voronoiToggle"
-            type="checkbox"
-        >
+        <input id="voronoiToggle" type="checkbox">
         Show Voronoi Diagram
     </label>
 
-
     <div id="status">
-        Click points around the map to create the city boundary.
+        Loading map...
     </div>
 
 </div>
+
 
 <script src="app.js"></script>
 

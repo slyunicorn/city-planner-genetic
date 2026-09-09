@@ -7,15 +7,54 @@ body {
     background: #111;
 }
 
+
+/* =========================================================
+   VIEWPORT
+   ========================================================= */
+
 #viewport {
     position: fixed;
     inset: 0;
     overflow: hidden;
+    touch-action: none;
 }
 
 
 /* =========================================================
-   THE ENTIRE MAP WORLD
+   WORLD
+   ========================================================= */
+
+#world {
+    position: absolute;
+    left: 0;
+    top: 0;
+
+    transform-origin: 0 0;
+
+    will-change: transform;
+}
+
+
+/* =========================================================
+   MAP
+   ========================================================= */
+
+#map {
+    position: absolute;
+
+    left: 0;
+    top: 0;
+
+    display: block;
+
+    pointer-events: none;
+
+    user-select: none;
+}
+
+
+/* =========================================================
+   SVG
    ========================================================= */
 
 #viz {
@@ -24,19 +63,10 @@ body {
     left: 0;
     top: 0;
 
-    overflow: visible;
-
     display: block;
 
-    touch-action: none;
+    overflow: visible;
 
-    transform-origin: 0 0;
-}
-
-
-/* Altitude map */
-
-#map {
     pointer-events: none;
 }
 
@@ -48,11 +78,13 @@ body {
 .sample-point {
     fill: white;
     opacity: 0.7;
+
     pointer-events: none;
 }
 
 .city-point {
     fill: #00e5ff;
+
     pointer-events: none;
 }
 
@@ -63,6 +95,7 @@ body {
 
 .city-boundary {
     fill: rgba(0, 200, 255, 0.12);
+
     stroke: #00d9ff;
     stroke-width: 2.5;
 
@@ -71,14 +104,22 @@ body {
     pointer-events: none;
 }
 
+
+/* =========================================================
+   BOUNDARY VERTICES
+   ========================================================= */
+
 .boundary-vertex {
     fill: #00d9ff;
+
     stroke: white;
     stroke-width: 1.5;
 
     vector-effect: non-scaling-stroke;
 
     cursor: grab;
+
+    pointer-events: all;
 }
 
 .boundary-vertex:active {
@@ -103,7 +144,7 @@ body {
 
 
 /* =========================================================
-   FLOATING CONTROLS
+   CONTROLS
    ========================================================= */
 
 #controls {
@@ -116,12 +157,14 @@ body {
 
     z-index: 1000;
 
-    padding: 0 0 14px 0;
+    padding: 0 0 14px;
 
     background: rgba(15, 15, 15, 0.94);
+
     color: white;
 
     border: 1px solid rgba(255, 255, 255, 0.15);
+
     border-radius: 10px;
 
     box-shadow:
@@ -131,13 +174,17 @@ body {
 }
 
 
-/* Drag handle */
+/* =========================================================
+   CONTROL HEADER
+   ========================================================= */
 
 #controls-header {
     height: 38px;
 
     display: flex;
+
     align-items: center;
+
     justify-content: space-between;
 
     padding: 0 12px;
@@ -161,7 +208,7 @@ body {
 
 
 /* =========================================================
-   CONTROLS
+   SLIDERS
    ========================================================= */
 
 .control-section {
@@ -170,6 +217,7 @@ body {
 
 .control-section label {
     display: flex;
+
     justify-content: space-between;
 
     font-size: 13px;
@@ -182,6 +230,10 @@ input[type="range"] {
 }
 
 
+/* =========================================================
+   BUTTONS
+   ========================================================= */
+
 button {
     display: block;
 
@@ -192,9 +244,11 @@ button {
     padding: 8px;
 
     border: none;
+
     border-radius: 6px;
 
     background: #333;
+
     color: white;
 
     cursor: pointer;
@@ -205,9 +259,15 @@ button:hover {
 }
 
 
+/* =========================================================
+   CHECKBOX
+   ========================================================= */
+
 .checkbox-row {
     display: flex;
+
     align-items: center;
+
     gap: 7px;
 
     margin: 12px;
@@ -216,10 +276,15 @@ button:hover {
 }
 
 
+/* =========================================================
+   STATUS
+   ========================================================= */
+
 #status {
     margin: 12px;
 
     font-size: 12px;
+
     line-height: 1.4;
 
     color: #aaa;
