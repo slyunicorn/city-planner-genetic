@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>D3 City Planner</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+
+    <style>
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+
+            width: 100%;
+            height: 100%;
+
+            overflow: hidden;
+
+            background: #111;
+        }
+
+
+        #map {
+            position: absolute;
+
+            left: 0;
+            top: 0;
+
+            width: 100vw;
+            height: 100vh;
+
+            object-fit: cover;
+
+            z-index: 0;
+        }
+
+
+        #viz {
+            position: absolute;
+
+            left: 0;
+            top: 0;
+
+            width: 100vw;
+            height: 100vh;
+
+            z-index: 1;
+        }
+
+
+        /* -------------------------------- */
+        /* Poisson points                   */
+        /* -------------------------------- */
+
+        .sample-point {
+            fill: white;
+
+            opacity: 0.85;
+
+            pointer-events: none;
+        }
+
+
+        /* -------------------------------- */
+        /* Points inside city               */
+        /* -------------------------------- */
+
+        .city-point {
+            fill: #00ffcc;
+
+            opacity: 0.9;
+
+            pointer-events: none;
+        }
+
+
+        /* -------------------------------- */
+        /* City boundary                    */
+        /* -------------------------------- */
+
+        .city-boundary {
+            fill: rgba(0, 200, 255, 0.12);
+
+            stroke: #00d9ff;
+
+            stroke-width: 3;
+
+            stroke-linejoin: round;
+        }
+
+
+        /* -------------------------------- */
+        /* Boundary vertices                */
+        /* -------------------------------- */
+
+        .boundary-vertex {
+
+            fill: #00d9ff;
+
+            stroke: white;
+
+            stroke-width: 2;
+
+            cursor: grab;
+        }
+
+
+        .boundary-vertex:active {
+
+            cursor: grabbing;
+        }
+
+
+        /* -------------------------------- */
+        /* Voronoi                          */
+        /* -------------------------------- */
+
+        .voronoi-cell {
+
+            fill: none;
+
+            stroke: rgba(255, 255, 255, 0.55);
+
+            stroke-width: 1;
+        }
+
+
+        /* -------------------------------- */
+        /* UI                               */
+        /* -------------------------------- */
+
+        #controls {
+
+            position: absolute;
+
+            top: 20px;
+            left: 20px;
+
+            z-index: 10;
+
+            padding: 15px;
+
+            color: white;
+
+            background: rgba(0, 0, 0, 0.78);
+
+            border-radius: 8px;
+
+            font-family: Arial, sans-serif;
+        }
+
+
+        #controls button {
+
+            margin-top: 8px;
+
+            padding: 7px 12px;
+
+            border: none;
+
+            border-radius: 5px;
+
+            cursor: pointer;
+        }
+
+
+        #controls label {
+
+            display: block;
+
+            margin-top: 12px;
+
+            cursor: pointer;
+        }
+
+
+        #status {
+
+            margin-top: 10px;
+
+            font-size: 13px;
+
+            color: #bbb;
+        }
+
+    </style>
+</head>
+
+
+<body>
+
+
+    <!-- ================================ -->
+    <!-- Elevation map                     -->
+    <!-- ================================ -->
+
+    <img
+        id="map"
+        src="altitude-map.png"
+        alt="Elevation map"
+    >
+
+
+    <!-- ================================ -->
+    <!-- D3 visualization                  -->
+    <!-- ================================ -->
+
+    <svg id="viz"></svg>
+
+
+    <!-- ================================ -->
+    <!-- Controls                          -->
+    <!-- ================================ -->
+
+    <div id="controls">
+
+        <strong>AI City Planner</strong>
+
+        <br>
+
+        <button id="generatePoints">
+            Generate Poisson Points
+        </button>
+
+        <br>
+
+        <button id="closeCity">
+            Close City
+        </button>
+
+        <br>
+
+        <button id="reset">
+            Reset
+        </button>
+
+
+        <label>
+
+            <input
+                type="checkbox"
+                id="voronoiToggle"
+            >
+
+            Show Voronoi Diagram
+
+        </label>
+
+
+        <div id="status">
+            Generating points...
+        </div>
+
+    </div>
+
+
+    <!-- ================================ -->
+    <!-- JavaScript                        -->
+    <!-- ================================ -->
+
+    <script src="app.js"></script>
+
+</body>
+
+</html>

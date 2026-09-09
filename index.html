@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>D3 City Planner</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+
+    <link
+        rel="stylesheet"
+        href="style.css"
+    >
+</head>
+
+<body>
+
+    <!-- ================================================= -->
+    <!-- MAP -->
+    <!-- ================================================= -->
+
+    <img
+        id="map"
+        src="altitude-map.png"
+        alt="Altitude map"
+    >
+
+
+    <!-- ================================================= -->
+    <!-- D3 SVG -->
+    <!-- ================================================= -->
+
+    <svg id="viz"></svg>
+
+
+    <!-- ================================================= -->
+    <!-- CONTROLS -->
+    <!-- ================================================= -->
+
+    <div id="controls">
+
+        <strong>AI City Planner</strong>
+
+
+        <!-- R -->
+
+        <div class="slider-container">
+
+            <label>
+                R:
+                <span id="rValue">18</span>
+            </label>
+
+            <input
+                id="rSlider"
+                type="range"
+                min="5"
+                max="100"
+                value="18"
+                step="1"
+            >
+
+        </div>
+
+
+        <!-- K -->
+
+        <div class="slider-container">
+
+            <label>
+                K:
+                <span id="kValue">30</span>
+            </label>
+
+            <input
+                id="kSlider"
+                type="range"
+                min="1"
+                max="100"
+                value="30"
+                step="1"
+            >
+
+        </div>
+
+
+        <button id="generatePoints">
+            Generate Poisson Points
+        </button>
+
+
+        <button id="closeCity">
+            Close City
+        </button>
+
+
+        <button id="reset">
+            Reset
+        </button>
+
+
+        <label class="checkbox">
+
+            <input
+                type="checkbox"
+                id="voronoiToggle"
+            >
+
+            Show Voronoi Diagram
+
+        </label>
+
+
+        <div id="status">
+            Loading map...
+        </div>
+
+    </div>
+
+
+    <script src="app.js"></script>
+
+</body>
+
+</html>

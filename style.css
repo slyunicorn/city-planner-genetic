@@ -1,0 +1,236 @@
+html,
+body {
+
+    margin: 0;
+
+    padding: 0;
+
+    width: 100%;
+
+    height: 100%;
+
+    overflow: hidden;
+
+    background: #111;
+
+    font-family: Arial, sans-serif;
+}
+
+
+/* ========================================================= */
+/* MAP                                                       */
+/* ========================================================= */
+
+#map {
+
+    position: absolute;
+
+    left: 0;
+    top: 0;
+
+    z-index: 0;
+
+    /*
+        IMPORTANT:
+
+        Do NOT use object-fit: cover.
+
+        The image and SVG have exactly the same
+        dimensions, so they should overlap 1:1.
+    */
+
+    display: block;
+}
+
+
+/* ========================================================= */
+/* D3 SVG                                                    */
+/* ========================================================= */
+
+#viz {
+
+    position: absolute;
+
+    left: 0;
+    top: 0;
+
+    z-index: 1;
+
+    display: block;
+
+    overflow: visible;
+}
+
+
+/* ========================================================= */
+/* POISSON POINTS                                            */
+/* ========================================================= */
+
+.sample-point {
+
+    fill: white;
+
+    opacity: 0.85;
+
+    pointer-events: none;
+}
+
+
+.city-point {
+
+    fill: #00ffcc;
+
+    opacity: 0.95;
+
+    pointer-events: none;
+}
+
+
+/* ========================================================= */
+/* CITY BOUNDARY                                             */
+/* ========================================================= */
+
+.city-boundary {
+
+    fill: rgba(0, 200, 255, 0.15);
+
+    stroke: #00d9ff;
+
+    stroke-width: 4;
+
+    stroke-linejoin: round;
+}
+
+
+/* ========================================================= */
+/* BOUNDARY VERTICES                                         */
+/* ========================================================= */
+
+.boundary-vertex {
+
+    fill: #00d9ff;
+
+    stroke: white;
+
+    stroke-width: 2;
+
+    cursor: grab;
+}
+
+
+.boundary-vertex:active {
+
+    cursor: grabbing;
+}
+
+
+/* ========================================================= */
+/* VORONOI                                                   */
+/* ========================================================= */
+
+.voronoi-cell {
+
+    fill: none;
+
+    stroke: rgba(255, 255, 255, 0.6);
+
+    stroke-width: 1.5;
+
+    pointer-events: none;
+}
+
+
+/* ========================================================= */
+/* CONTROLS                                                   */
+/* ========================================================= */
+
+#controls {
+
+    position: absolute;
+
+    top: 20px;
+
+    left: 20px;
+
+    z-index: 10;
+
+    width: 230px;
+
+    padding: 16px;
+
+    color: white;
+
+    background: rgba(0, 0, 0, 0.82);
+
+    border-radius: 8px;
+}
+
+
+#controls strong {
+
+    display: block;
+
+    margin-bottom: 15px;
+}
+
+
+.slider-container {
+
+    margin-bottom: 12px;
+}
+
+
+.slider-container label {
+
+    display: block;
+
+    margin-bottom: 4px;
+
+    font-size: 14px;
+}
+
+
+.slider-container input {
+
+    width: 100%;
+}
+
+
+button {
+
+    width: 100%;
+
+    margin-top: 7px;
+
+    padding: 8px;
+
+    border: none;
+
+    border-radius: 5px;
+
+    cursor: pointer;
+}
+
+
+.checkbox {
+
+    display: block;
+
+    margin-top: 14px;
+
+    cursor: pointer;
+
+    font-size: 14px;
+}
+
+
+#status {
+
+    margin-top: 12px;
+
+    color: #bbb;
+
+    font-size: 12px;
+
+    line-height: 1.5;
+}
