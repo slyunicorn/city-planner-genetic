@@ -1325,20 +1325,43 @@ function drawVoronoi() {
 
 
 // ============================================================
-// FAKE CENTROID (plain average of Voronoi cell vertices)
+// FAKE CENTROID (geometric average, then shifted toward blue)
 // ============================================================
 //
-// Color-seeking is handled separately (see findBluestDirection
-// below) and blended in per-point in relaxPoints(), so this
-// stays a plain geometric centroid - the thing that keeps
-// points evenly spaced.
+// Starts as the plain average of the cell's vertices, then
+// steers that centroid toward color:
+//
+//   1. Loop the vertices and build an average "blue direction"
+//      - each vertex's direction away from the centroid,
+//      weighted by how blue that vertex is. Vertices sitting on
+//      blue ground pull hard, yellow ones barely pull at all,
+//      so the summed direction points wherever the blue is.
+//   2. Compare the vertices' average blueness against the
+//      blueness at the centroid itself.
+//   3. Shift the centroid along the blue direction by an amount
+//      proportional to that difference. A centroid stranded in
+//      a very yellow spot with blue vertices around it gets a
+//      big shift and moves fast; a centroid already as blue as
+//      its surroundings gets no shift at all and the plain
+//      geometric centroid is returned unchanged.
+//
+// The shift is measured in units of the cell's own radius, so
+// it self-scales with point density instead of needing R.
 // ============================================================
+
+// How far (in cell radii) a full 1.0 blueness difference moves
+// the centroid. Higher = more aggressive colour seeking.
+const COLOR_SHIFT_STRENGTH = 1.5;
 
 function getFakeCentroid(polygon) {
 
     if (!polygon || polygon.length === 0) {
         return null;
     }
+
+    // --------------------------------------------------------
+    // Plain geometric centroid
+    // --------------------------------------------------------
 
     let sumX = 0;
     let sumY = 0;
@@ -1349,9 +1372,95 @@ function getFakeCentroid(polygon) {
         sumY += vertex[1];
     }
 
-    return {
+    const centroid = {
         x: sumX / polygon.length,
         y: sumY / polygon.length
+    };
+
+    // Without pixel data there's no colour to steer by.
+    if (!mapImageData) {
+        return centroid;
+    }
+
+    // --------------------------------------------------------
+    // Average blue direction + average blueness of vertices
+    // --------------------------------------------------------
+
+    let dirX = 0;
+    let dirY = 0;
+
+    let sumBlueness = 0;
+    let sumDistance = 0;
+
+    for (const vertex of polygon) {
+
+        // 0 = fully yellow, 1 = fully blue.
+        const blueness =
+            1 - getViridisTAt(vertex[0], vertex[1]);
+
+        sumBlueness += blueness;
+
+        const dx = vertex[0] - centroid.x;
+        const dy = vertex[1] - centroid.y;
+
+        const dist =
+            Math.hypot(dx, dy);
+
+        sumDistance += dist;
+
+        if (dist < 1e-6) {
+            continue;
+        }
+
+        // Direction toward this vertex, weighted by its blue.
+        dirX += (dx / dist) * blueness;
+        dirY += (dy / dist) * blueness;
+    }
+
+    const averageBlueness =
+        sumBlueness / polygon.length;
+
+    const cellRadius =
+        sumDistance / polygon.length;
+
+    const dirMagnitude =
+        Math.hypot(dirX, dirY);
+
+    // Blue spread evenly all around -> no direction to prefer.
+    if (dirMagnitude < 1e-6 || cellRadius < 1e-6) {
+        return centroid;
+    }
+
+    // --------------------------------------------------------
+    // How much bluer is the surrounding ring than right here?
+    // --------------------------------------------------------
+
+    const centroidBlueness =
+        1 - getViridisTAt(centroid.x, centroid.y);
+
+    const difference =
+        averageBlueness - centroidBlueness;
+
+    // Centroid is already at least as blue as its ring - the
+    // colour shouldn't drag it anywhere.
+    if (difference <= 0) {
+        return centroid;
+    }
+
+    // --------------------------------------------------------
+    // Shift proportional to the difference: big difference
+    // (centroid stuck in yellow) moves it a lot, small
+    // difference nudges it gently.
+    // --------------------------------------------------------
+
+    const shift =
+        difference *
+        cellRadius *
+        COLOR_SHIFT_STRENGTH;
+
+    return {
+        x: centroid.x + (dirX / dirMagnitude) * shift,
+        y: centroid.y + (dirY / dirMagnitude) * shift
     };
 }
 
