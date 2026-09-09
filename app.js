@@ -66,6 +66,15 @@ let K = Number(kSlider.value);
 
 
 // ============================================================
+// RELAXATION STATE
+// ============================================================
+
+let relaxing = false;
+
+const LERP_AMOUNT = 0.08;
+
+
+// ============================================================
 // INITIALIZE
 // ============================================================
 
@@ -584,6 +593,34 @@ function draw() {
 
 
 // ============================================================
+// GET POINTS INSIDE CLOSED CITY BOUNDARY
+// ============================================================
+
+function getInsideCityPoints() {
+
+    if (!cityClosed || boundaryPoints.length < 3) {
+        return points;
+    }
+
+    const splinePoints =
+        createSplinePoints(
+            boundaryPoints,
+            25
+        );
+
+    const polygon =
+        splinePoints.map(q => [q.x, q.y]);
+
+    return points.filter(p =>
+        d3.polygonContains(
+            polygon,
+            [p.x, p.y]
+        )
+    );
+}
+
+
+// ============================================================
 // DRAW POINTS
 // ============================================================
 
@@ -595,26 +632,10 @@ function drawPoints() {
         return;
     }
 
-    let visiblePoints = points;
-
     // Once city is closed, only show points INSIDE
     // the actual curved city boundary.
-    if (cityClosed && boundaryPoints.length >= 3) {
-
-        const splinePoints =
-            createSplinePoints(
-                boundaryPoints,
-                25
-            );
-
-        visiblePoints =
-            points.filter(p =>
-                d3.polygonContains(
-                    splinePoints.map(q => [q.x, q.y]),
-                    [p.x, p.y]
-                )
-            );
-    }
+    const visiblePoints =
+        getInsideCityPoints();
 
     // Keep dots a constant size on screen.
     const radius =
@@ -946,14 +967,24 @@ function drawVoronoi() {
     }
 
 
-    if (points.length < 2) {
+    // --------------------------------------------------------
+    // Once the city is closed, the Voronoi diagram is built
+    // only from points inside the boundary, so points outside
+    // the city no longer influence the cells.
+    // --------------------------------------------------------
+
+    const activePoints =
+        getInsideCityPoints();
+
+
+    if (activePoints.length < 2) {
         return;
     }
 
 
     const delaunay =
         d3.Delaunay.from(
-            points,
+            activePoints,
             d => d.x,
             d => d.y
         );
@@ -986,7 +1017,7 @@ function drawVoronoi() {
 
     for (
         let i = 0;
-        i < points.length;
+        i < activePoints.length;
         i++
     ) {
 
@@ -1021,6 +1052,158 @@ function drawVoronoi() {
 
 
 // ============================================================
+// FAKE CENTROID (average of Voronoi cell vertices)
+// ============================================================
+
+function getFakeCentroid(polygon) {
+
+    if (!polygon || polygon.length === 0) {
+        return null;
+    }
+
+    let sumX = 0;
+    let sumY = 0;
+
+    for (const vertex of polygon) {
+
+        sumX += vertex[0];
+        sumY += vertex[1];
+    }
+
+    return {
+        x: sumX / polygon.length,
+        y: sumY / polygon.length
+    };
+}
+
+
+// ============================================================
+// RELAX POINTS (Lloyd-style, fake centroid, points inside
+// the city boundary only)
+// ============================================================
+
+function relaxPoints() {
+
+    if (!cityClosed || boundaryPoints.length < 3) {
+        return;
+    }
+
+    const insidePoints =
+        getInsideCityPoints();
+
+    if (insidePoints.length < 2) {
+        return;
+    }
+
+    const delaunay =
+        d3.Delaunay.from(
+            insidePoints,
+            d => d.x,
+            d => d.y
+        );
+
+    const voronoi =
+        delaunay.voronoi([
+            0,
+            0,
+            WORLD_WIDTH,
+            WORLD_HEIGHT
+        ]);
+
+    // --------------------------------------------------------
+    // Find fake centroid of every Voronoi polygon, then LERP
+    // each point toward its own cell's fake centroid.
+    // insidePoints holds references to the same objects that
+    // live in `points`, so mutating them here updates `points`
+    // too.
+    // --------------------------------------------------------
+
+    for (let i = 0; i < insidePoints.length; i++) {
+
+        const polygon =
+            voronoi.cellPolygon(i);
+
+        if (!polygon || polygon.length < 3) {
+            continue;
+        }
+
+        const centroid =
+            getFakeCentroid(polygon);
+
+        if (!centroid) {
+            continue;
+        }
+
+        const point =
+            insidePoints[i];
+
+        point.x =
+            point.x +
+            (centroid.x - point.x) *
+            LERP_AMOUNT;
+
+        point.y =
+            point.y +
+            (centroid.y - point.y) *
+            LERP_AMOUNT;
+    }
+
+    drawPoints();
+    drawVoronoi();
+}
+
+
+// ============================================================
+// START / STOP RELAXATION LOOP
+// ============================================================
+
+function startRelaxation(iterations = 150) {
+
+    if (relaxing) {
+        return;
+    }
+
+    if (!cityClosed) {
+        return;
+    }
+
+    relaxing = true;
+
+    let iteration = 0;
+
+    function animate() {
+
+        if (!relaxing || iteration >= iterations) {
+
+            relaxing = false;
+
+            status.textContent =
+                "Point relaxation complete.";
+
+            return;
+        }
+
+        relaxPoints();
+
+        iteration++;
+
+        status.textContent =
+            `Relaxing points... (${iteration}/${iterations})`;
+
+        requestAnimationFrame(animate);
+    }
+
+    requestAnimationFrame(animate);
+}
+
+
+function stopRelaxation() {
+
+    relaxing = false;
+}
+
+
+// ============================================================
 // MAP CLICK
 // ============================================================
 
@@ -1039,7 +1222,7 @@ viewport.addEventListener(
         }
 
 
-        if (!WORLD_WIDTH) {
+        if (!WORLD_WIDTH || !WORLD_HEIGHT) {
             return;
         }
 
@@ -1049,6 +1232,20 @@ viewport.addEventListener(
                 event.clientX,
                 event.clientY
             );
+
+
+        // ----------------------------------------------------
+        // Do not allow boundary points outside the map
+        // ----------------------------------------------------
+
+        if (
+            p.x < 0 ||
+            p.x > WORLD_WIDTH ||
+            p.y < 0 ||
+            p.y > WORLD_HEIGHT
+        ) {
+            return;
+        }
 
 
         // ----------------------------------------------------
@@ -1090,10 +1287,13 @@ viewport.addEventListener(
 		drawPoints();
 
                 status.textContent =
-                    "City boundary closed. Points outside the city are hidden.";
+                    "City boundary closed. Relaxing points toward Voronoi fake centroids...";
 
 
                 drawVoronoi();
+
+
+                startRelaxation(150);
 
 
                 return;
@@ -1220,6 +1420,9 @@ resetBtn.addEventListener(
     "click",
     () => {
 
+        stopRelaxation();
+
+
         boundaryPoints = [];
 
         cityClosed = false;
@@ -1267,6 +1470,8 @@ resetBtn.addEventListener(
 generateBtn.addEventListener(
     "click",
     () => {
+
+        stopRelaxation();
 
         generatePoints();
     }
