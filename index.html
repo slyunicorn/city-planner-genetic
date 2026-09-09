@@ -1,140 +1,121 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
-    <title>D3 City Planner</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI City Planner</title>
 
     <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
-
-    <link
-        rel="stylesheet"
-        href="style.css"
-    >
+    <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
 
-    <div id="viewport">
+<div id="viewport">
 
-        <div id="world">
+    <!-- Everything in the map lives inside this SVG -->
+    <svg id="viz">
+        <defs>
+            <clipPath id="cityClip">
+                <path id="cityClipPath"></path>
+            </clipPath>
+        </defs>
 
-            <img
-                id="map"
-                src="altitude-map.png"
-                alt="Altitude map"
-            >
+        <!-- Altitude map -->
+        <image id="map"
+               href="altitude-map.png"
+               preserveAspectRatio="none">
+        </image>
 
-            <svg id="viz"></svg>
+        <!-- Voronoi -->
+        <g id="voronoiLayer"></g>
 
-        </div>
+        <!-- City boundary -->
+        <g id="boundaryLayer"></g>
 
+        <!-- Points -->
+        <g id="pointLayer"></g>
+
+        <!-- Boundary editing vertices -->
+        <g id="vertexLayer"></g>
+    </svg>
+
+</div>
+
+
+<!-- Floating controls -->
+<div id="controls">
+
+    <div id="controls-header">
+        <span>City Planner</span>
+        <span id="drag-hint">⠿</span>
     </div>
 
+    <div class="control-section">
 
-    <!-- ================================================ -->
-    <!-- FLOATING CONTROL PANEL                            -->
-    <!-- ================================================ -->
-
-    <div id="controls">
-
-        <div id="controls-header">
-
-            <strong>
-                AI City Planner
-            </strong>
-
-            <span id="dragHint">
-                ⋮⋮
-            </span>
-
-        </div>
-
-
-        <!-- R -->
-
-        <div class="slider-container">
-
-            <label>
-                R:
-                <span id="rValue">18</span>
-            </label>
-
-            <input
-                id="rSlider"
-                type="range"
-                min="3"
-                max="100"
-                value="18"
-                step="1"
-            >
-
-        </div>
-
-
-        <!-- K -->
-
-        <div class="slider-container">
-
-            <label>
-                K:
-                <span id="kValue">30</span>
-            </label>
-
-            <input
-                id="kSlider"
-                type="range"
-                min="1"
-                max="100"
-                value="30"
-                step="1"
-            >
-
-        </div>
-
-
-        <button id="generatePoints">
-            Generate Poisson Points
-        </button>
-
-
-        <button id="closeCity">
-            Close City
-        </button>
-
-
-        <button id="reset">
-            Reset
-        </button>
-
-
-        <label class="checkbox">
-
-            <input
-                type="checkbox"
-                id="voronoiToggle"
-            >
-
-            Show Voronoi Diagram
-
+        <label>
+            R:
+            <span id="rValue">18</span>
         </label>
 
-
-        <div id="status">
-            Loading map...
-        </div>
+        <input
+            id="rSlider"
+            type="range"
+            min="3"
+            max="100"
+            value="18"
+        >
 
     </div>
 
 
-    <script src="app.js"></script>
+    <div class="control-section">
+
+        <label>
+            K:
+            <span id="kValue">30</span>
+        </label>
+
+        <input
+            id="kSlider"
+            type="range"
+            min="1"
+            max="100"
+            value="30"
+        >
+
+    </div>
+
+
+    <button id="generateBtn">
+        Generate Poisson Points
+    </button>
+
+    <button id="closeBtn">
+        Close City
+    </button>
+
+    <button id="resetBtn">
+        Reset
+    </button>
+
+
+    <label class="checkbox-row">
+        <input
+            id="voronoiToggle"
+            type="checkbox"
+        >
+        Show Voronoi Diagram
+    </label>
+
+
+    <div id="status">
+        Click points around the map to create the city boundary.
+    </div>
+
+</div>
+
+<script src="app.js"></script>
 
 </body>
-
 </html>

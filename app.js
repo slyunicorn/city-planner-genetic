@@ -1,5 +1,23 @@
 // ============================================================
-// D3 CITY PLANNER
+// AI CITY PLANNER
+// app.js
+// ============================================================
+//
+// Features:
+// - Uses altitude-map.png at its exact natural dimensions
+// - Fast Poisson-disc sampling
+// - Adjustable R and K
+// - Click points to create a city boundary
+// - Smooth Catmull-Rom closed spline
+// - Removes points outside the city
+// - Voronoi diagram
+// - Voronoi clipped to city boundary
+// - Zoom centered around mouse
+// - Map always stays centered correctly
+// - Points stay constant size on screen
+// - Voronoi lines stay constant size on screen
+// - Draggable control panel
+//
 // ============================================================
 
 
@@ -7,50 +25,56 @@
 // DOM
 // ============================================================
 
-const map =
-    document.getElementById("map");
+const viewport = document.getElementById("viewport");
+const svgElement = document.getElementById("viz");
+const mapElement = document.getElementById("map");
 
-const viewport =
-    document.getElementById("viewport");
+const svg = d3.select(svgElement);
 
-const world =
-    document.getElementById("world");
+const map = d3.select(mapElement);
 
-const svg =
-    d3.select("#viz");
+const pointLayer = d3.select("#pointLayer");
+const voronoiLayer = d3.select("#voronoiLayer");
+const boundaryLayer = d3.select("#boundaryLayer");
+const vertexLayer = d3.select("#vertexLayer");
+
+const cityClipPath = d3.select("#cityClipPath");
 
 
 // ============================================================
-// WORLD DIMENSIONS
+// CONTROLS
+// ============================================================
+
+const rSlider = document.getElementById("rSlider");
+const kSlider = document.getElementById("kSlider");
+
+const rValue = document.getElementById("rValue");
+const kValue = document.getElementById("kValue");
+
+const generateBtn = document.getElementById("generateBtn");
+const closeBtn = document.getElementById("closeBtn");
+const resetBtn = document.getElementById("resetBtn");
+
+const voronoiToggle = document.getElementById("voronoiToggle");
+
+const status = document.getElementById("status");
+
+
+// ============================================================
+// WORLD / CAMERA
 // ============================================================
 
 let WORLD_WIDTH = 0;
-
 let WORLD_HEIGHT = 0;
-
-
-// ============================================================
-// CAMERA
-// ============================================================
 
 let zoomScale = 1;
 
 let cameraX = 0;
-
 let cameraY = 0;
 
 
 // ============================================================
-// POINT PARAMETERS
-// ============================================================
-
-const DEFAULT_R = 18;
-
-const DEFAULT_K = 30;
-
-
-// ============================================================
-// STATE
+// CITY DATA
 // ============================================================
 
 let allPoints = [];
@@ -65,87 +89,182 @@ let showVoronoi = false;
 
 
 // ============================================================
-// D3 LAYERS
+// SETTINGS
 // ============================================================
 
-const voronoiLayer =
-    svg
-        .append("g")
-        .attr(
-            "class",
-            "voronoi-layer"
-        );
-
-
-const pointLayer =
-    svg
-        .append("g")
-        .attr(
-            "class",
-            "point-layer"
-        );
-
-
-const boundaryLayer =
-    svg
-        .append("g")
-        .attr(
-            "class",
-            "boundary-layer"
-        );
-
-
-const vertexLayer =
-    svg
-        .append("g")
-        .attr(
-            "class",
-            "vertex-layer"
-        );
+let R = Number(rSlider.value);
+let K = Number(kSlider.value);
 
 
 // ============================================================
-// R / K
+// UPDATE SLIDER LABELS
 // ============================================================
-
-function getR() {
-
-    return Number(
-        document
-            .getElementById(
-                "rSlider"
-            )
-            .value
-    );
-}
-
-
-function getK() {
-
-    return Number(
-        document
-            .getElementById(
-                "kSlider"
-            )
-            .value
-    );
-}
-
 
 function updateSliderLabels() {
 
-    document
-        .getElementById(
-            "rValue"
-        )
-        .textContent = getR();
+    R = Number(rSlider.value);
+    K = Number(kSlider.value);
+
+    rValue.textContent = R;
+    kValue.textContent = K;
+}
+
+rSlider.addEventListener("input", updateSliderLabels);
+kSlider.addEventListener("input", updateSliderLabels);
+
+updateSliderLabels();
 
 
-    document
-        .getElementById(
-            "kValue"
-        )
-        .textContent = getK();
+// ============================================================
+// INITIALIZE MAP
+// ============================================================
+
+function initializeMap() {
+
+    WORLD_WIDTH = mapElement.naturalWidth;
+    WORLD_HEIGHT = mapElement.naturalHeight;
+
+    if (!WORLD_WIDTH || !WORLD_HEIGHT) {
+
+        console.error(
+            "Could not determine altitude-map.png dimensions."
+        );
+
+        status.textContent =
+            "Error: altitude-map.png could not be loaded.";
+
+        return;
+    }
+
+
+    console.log(
+        `Map dimensions: ${WORLD_WIDTH} × ${WORLD_HEIGHT}`
+    );
+
+
+    // SVG uses the exact image dimensions
+    svg
+        .attr("width", WORLD_WIDTH)
+        .attr("height", WORLD_HEIGHT)
+        .attr(
+            "viewBox",
+            `0 0 ${WORLD_WIDTH} ${WORLD_HEIGHT}`
+        );
+
+
+    // Image occupies the entire SVG
+    map
+        .attr("x", 0)
+        .attr("y", 0)
+        .attr("width", WORLD_WIDTH)
+        .attr("height", WORLD_HEIGHT);
+
+
+    centerWorld();
+
+    generatePoints();
+}
+
+
+// ============================================================
+// CENTER WORLD
+// ============================================================
+//
+// screen = world * zoom + camera
+//
+// This guarantees that the image is centered regardless
+// of its size and current zoom level.
+// ============================================================
+
+function centerWorld() {
+
+    const screenWidth =
+        viewport.clientWidth;
+
+    const screenHeight =
+        viewport.clientHeight;
+
+
+    cameraX =
+        (screenWidth -
+            WORLD_WIDTH * zoomScale) / 2;
+
+    cameraY =
+        (screenHeight -
+            WORLD_HEIGHT * zoomScale) / 2;
+
+
+    updateCamera();
+}
+
+
+// ============================================================
+// APPLY CAMERA
+// ============================================================
+//
+// matrix() explicitly means:
+//
+// x_screen = x_world * zoom + cameraX
+// y_screen = y_world * zoom + cameraY
+//
+// This avoids transform-order problems.
+// ============================================================
+
+function updateCamera() {
+
+    svgElement.style.transform =
+        `matrix(
+            ${zoomScale},
+            0,
+            0,
+            ${zoomScale},
+            ${cameraX},
+            ${cameraY}
+        )`;
+
+
+    draw();
+}
+
+
+// ============================================================
+// SCREEN → WORLD COORDINATES
+// ============================================================
+
+function screenToWorld(event) {
+
+    const rect =
+        viewport.getBoundingClientRect();
+
+
+    const screenX =
+        event.clientX - rect.left;
+
+    const screenY =
+        event.clientY - rect.top;
+
+
+    const worldX =
+        (screenX - cameraX) / zoomScale;
+
+    const worldY =
+        (screenY - cameraY) / zoomScale;
+
+
+    return [worldX, worldY];
+}
+
+
+// ============================================================
+// WORLD → SCREEN COORDINATES
+// ============================================================
+
+function worldToScreen(point) {
+
+    return [
+        point[0] * zoomScale + cameraX,
+        point[1] * zoomScale + cameraY
+    ];
 }
 
 
@@ -160,149 +279,92 @@ function poissonDiscSampling(
     k
 ) {
 
+    const points = [];
+
+
+    // Grid cell size
     const cellSize =
-        radius /
-        Math.sqrt(2);
+        radius / Math.sqrt(2);
 
 
-    const gridWidth =
-        Math.ceil(
-            width /
-            cellSize
-        );
+    const cols =
+        Math.ceil(width / cellSize);
 
-
-    const gridHeight =
-        Math.ceil(
-            height /
-            cellSize
-        );
+    const rows =
+        Math.ceil(height / cellSize);
 
 
     const grid =
-        new Array(
-            gridWidth *
-            gridHeight
-        ).fill(null);
+        new Array(cols * rows).fill(null);
 
 
-    const points = [];
+    function gridIndex(x, y) {
 
-    const active = [];
+        const col =
+            Math.floor(x / cellSize);
 
-
-    function gridIndex(
-        x,
-        y
-    ) {
-
-        const gx =
-            Math.floor(
-                x /
-                cellSize
-            );
-
-
-        const gy =
-            Math.floor(
-                y /
-                cellSize
-            );
-
+        const row =
+            Math.floor(y / cellSize);
 
         if (
-            gx < 0 ||
-            gy < 0 ||
-            gx >= gridWidth ||
-            gy >= gridHeight
+            col < 0 ||
+            col >= cols ||
+            row < 0 ||
+            row >= rows
         ) {
-
             return -1;
         }
 
-
-        return (
-            gy *
-            gridWidth +
-            gx
-        );
+        return row * cols + col;
     }
 
 
-    function isValid(
-        point
-    ) {
-
-        if (
-            point.x < 0 ||
-            point.x >= width ||
-            point.y < 0 ||
-            point.y >= height
-        ) {
-
-            return false;
-        }
-
+    function isValid(point) {
 
         const gx =
-            Math.floor(
-                point.x /
-                cellSize
-            );
-
+            Math.floor(point[0] / cellSize);
 
         const gy =
-            Math.floor(
-                point.y /
-                cellSize
-            );
+            Math.floor(point[1] / cellSize);
 
 
+        // Check neighboring cells
         for (
-            let yy = gy - 2;
-            yy <= gy + 2;
-            yy++
+            let y = gy - 2;
+            y <= gy + 2;
+            y++
         ) {
 
             for (
-                let xx = gx - 2;
-                xx <= gx + 2;
-                xx++
+                let x = gx - 2;
+                x <= gx + 2;
+                x++
             ) {
 
                 if (
-                    xx < 0 ||
-                    yy < 0 ||
-                    xx >= gridWidth ||
-                    yy >= gridHeight
+                    x < 0 ||
+                    x >= cols ||
+                    y < 0 ||
+                    y >= rows
                 ) {
-
                     continue;
                 }
 
 
-                const neighbor =
-                    grid[
-                        yy *
-                        gridWidth +
-                        xx
-                    ];
+                const existing =
+                    grid[y * cols + x];
 
 
-                if (!neighbor) {
-
+                if (!existing) {
                     continue;
                 }
 
 
                 const dx =
-                    point.x -
-                    neighbor.x;
-
+                    existing[0] - point[0];
 
                 const dy =
-                    point.y -
-                    neighbor.y;
+                    existing[1] - point[1];
 
 
                 if (
@@ -321,68 +383,40 @@ function poissonDiscSampling(
     }
 
 
-    function addPoint(
-        point
-    ) {
-
-        points.push(point);
-
-        active.push(point);
+    // Random starting point
+    const firstPoint = [
+        Math.random() * width,
+        Math.random() * height
+    ];
 
 
-        const index =
-            gridIndex(
-                point.x,
-                point.y
-            );
+    points.push(firstPoint);
+
+    const firstIndex =
+        gridIndex(
+            firstPoint[0],
+            firstPoint[1]
+        );
+
+    grid[firstIndex] = firstPoint;
 
 
-        if (
-            index !== -1
-        ) {
-
-            grid[index] =
-                point;
-        }
-    }
+    const active = [firstPoint];
 
 
-    // Initial point
+    while (active.length > 0) {
 
-    addPoint({
-
-        x:
-            Math.random() *
-            width,
-
-        y:
-            Math.random() *
-            height
-
-    });
-
-
-    // Bridson algorithm
-
-    while (
-        active.length
-    ) {
-
-        const activeIndex =
+        const randomIndex =
             Math.floor(
-                Math.random() *
-                active.length
+                Math.random() * active.length
             );
 
 
         const current =
-            active[
-                activeIndex
-            ];
+            active[randomIndex];
 
 
-        let found =
-            false;
+        let found = false;
 
 
         for (
@@ -397,50 +431,63 @@ function poissonDiscSampling(
                 2;
 
 
+            // Generate between R and 2R
             const distance =
                 radius *
-                (
-                    1 +
-                    Math.random()
-                );
+                (1 + Math.random());
 
 
-            const candidate = {
+            const candidate = [
 
-                x:
-                    current.x +
+                current[0] +
                     Math.cos(angle) *
                     distance,
 
-                y:
-                    current.y +
+                current[1] +
                     Math.sin(angle) *
                     distance
-
-            };
+            ];
 
 
             if (
-                isValid(
-                    candidate
-                )
+                candidate[0] < 0 ||
+                candidate[0] >= width ||
+                candidate[1] < 0 ||
+                candidate[1] >= height
             ) {
+                continue;
+            }
 
-                addPoint(
-                    candidate
+
+            if (!isValid(candidate)) {
+                continue;
+            }
+
+
+            points.push(candidate);
+
+
+            const index =
+                gridIndex(
+                    candidate[0],
+                    candidate[1]
                 );
 
-                found = true;
 
-                break;
-            }
+            grid[index] = candidate;
+
+            active.push(candidate);
+
+            found = true;
+
+            break;
         }
 
 
         if (!found) {
 
             active.splice(
-                activeIndex,
+                randomIndex,
                 1
             );
         }
@@ -452,7 +499,202 @@ function poissonDiscSampling(
 
 
 // ============================================================
-// POINT IN POLYGON
+// GENERATE POINTS
+// ============================================================
+
+function generatePoints() {
+
+    if (!WORLD_WIDTH || !WORLD_HEIGHT) {
+        return;
+    }
+
+
+    status.textContent =
+        "Generating points...";
+
+
+    // Small timeout lets the browser update the UI
+    // before doing potentially expensive work.
+    setTimeout(() => {
+
+        allPoints =
+            poissonDiscSampling(
+                WORLD_WIDTH,
+                WORLD_HEIGHT,
+                R,
+                K
+            );
+
+
+        cityPoints = [];
+
+        boundary = [];
+
+        cityClosed = false;
+
+
+        draw();
+
+
+        status.textContent =
+            `${allPoints.length} points generated. ` +
+            `Click around the map to create the city boundary.`;
+
+    }, 20);
+}
+
+
+// ============================================================
+// CATMULL-ROM CLOSED SPLINE
+// ============================================================
+//
+// We create a dense approximation of the spline.
+//
+// This is important because the SAME geometry is used for:
+//
+// 1. Visual boundary
+// 2. Point filtering
+// 3. Voronoi clipping
+//
+// Therefore points cannot disagree with the visible wall.
+// ============================================================
+
+function createSplinePoints(
+    points,
+    samplesPerSegment = 20
+) {
+
+    if (points.length < 2) {
+        return points.slice();
+    }
+
+
+    const result = [];
+
+
+    const n = points.length;
+
+
+    for (
+        let i = 0;
+        i < n;
+        i++
+    ) {
+
+        const p0 =
+            points[
+                (i - 1 + n) % n
+            ];
+
+        const p1 =
+            points[i];
+
+        const p2 =
+            points[
+                (i + 1) % n
+            ];
+
+        const p3 =
+            points[
+                (i + 2) % n
+            ];
+
+
+        for (
+            let j = 0;
+            j < samplesPerSegment;
+            j++
+        ) {
+
+            const t =
+                j / samplesPerSegment;
+
+            const t2 = t * t;
+            const t3 = t2 * t;
+
+
+            const x =
+                0.5 *
+                (
+                    (2 * p1[0]) +
+
+                    (-p0[0] + p2[0]) * t +
+
+                    (
+                        2 * p0[0] -
+                        5 * p1[0] +
+                        4 * p2[0] -
+                        p3[0]
+                    ) * t2 +
+
+                    (
+                        -p0[0] +
+                        3 * p1[0] -
+                        3 * p2[0] +
+                        p3[0]
+                    ) * t3
+                );
+
+
+            const y =
+                0.5 *
+                (
+                    (2 * p1[1]) +
+
+                    (-p0[1] + p2[1]) * t +
+
+                    (
+                        2 * p0[1] -
+                        5 * p1[1] +
+                        4 * p2[1] -
+                        p3[1]
+                    ) * t2 +
+
+                    (
+                        -p0[1] +
+                        3 * p1[1] -
+                        3 * p2[1] +
+                        p3[1]
+                    ) * t3
+                );
+
+
+            result.push([x, y]);
+        }
+    }
+
+
+    return result;
+}
+
+
+// ============================================================
+// SPLINE PATH
+// ============================================================
+
+function createBoundaryPath() {
+
+    if (boundary.length < 2) {
+        return "";
+    }
+
+
+    const line =
+        d3.line()
+            .x(d => d[0])
+            .y(d => d[1])
+            .curve(
+                d3.curveCatmullRomClosed
+                    .alpha(0.5)
+            );
+
+
+    return line(boundary);
+}
+
+
+// ============================================================
+// POINT INSIDE POLYGON
 // ============================================================
 
 function pointInsidePolygon(
@@ -460,58 +702,10 @@ function pointInsidePolygon(
     polygon
 ) {
 
-    let inside = false;
-
-
-    for (
-        let i = 0,
-            j = polygon.length - 1;
-
-        i < polygon.length;
-
-        j = i++
-    ) {
-
-        const a =
-            polygon[i];
-
-
-        const b =
-            polygon[j];
-
-
-        const intersects =
-
-            (
-                (a.y > point.y) !==
-                (b.y > point.y)
-            )
-
-            &&
-
-            (
-                point.x <
-                (
-                    (b.x - a.x) *
-                    (point.y - a.y)
-                )
-                /
-                (b.y - a.y)
-                +
-                a.x
-            );
-
-
-        if (
-            intersects
-        ) {
-
-            inside = !inside;
-        }
-    }
-
-
-    return inside;
+    return d3.polygonContains(
+        polygon,
+        point
+    );
 }
 
 
@@ -521,15 +715,20 @@ function pointInsidePolygon(
 
 function updateCityPoints() {
 
-    if (
-        !cityClosed ||
-        boundary.length < 3
-    ) {
+    if (!cityClosed) {
 
-        cityPoints = [];
+        cityPoints =
+            allPoints.slice();
 
         return;
     }
+
+
+    const spline =
+        createSplinePoints(
+            boundary,
+            20
+        );
 
 
     cityPoints =
@@ -537,414 +736,8 @@ function updateCityPoints() {
             point =>
                 pointInsidePolygon(
                     point,
-                    boundary
+                    spline
                 )
-        );
-}
-
-
-// ============================================================
-// CITY SPLINE
-// ============================================================
-
-function createBoundaryPath() {
-
-    if (
-        boundary.length === 0
-    ) {
-
-        return null;
-    }
-
-
-    const line =
-        d3.line()
-
-            .x(
-                d => d.x
-            )
-
-            .y(
-                d => d.y
-            )
-
-            .curve(
-
-                cityClosed
-
-                    ?
-
-                d3.curveCatmullRomClosed
-                    .alpha(0.5)
-
-                    :
-
-                d3.curveCatmullRom
-                    .alpha(0.5)
-            );
-
-
-    return line(
-        boundary
-    );
-}
-
-
-// ============================================================
-// DRAW BOUNDARY
-// ============================================================
-
-function drawBoundary() {
-
-    boundaryLayer
-        .selectAll("*")
-        .remove();
-
-
-    vertexLayer
-        .selectAll("*")
-        .remove();
-
-
-    if (
-        boundary.length === 0
-    ) {
-
-        return;
-    }
-
-
-    const path =
-        createBoundaryPath();
-
-
-    if (path) {
-
-        boundaryLayer
-            .append("path")
-
-            .attr(
-                "class",
-                "city-boundary"
-            )
-
-            .attr(
-                "d",
-                path
-            );
-    }
-
-
-    const vertices =
-        vertexLayer
-            .selectAll("circle")
-            .data(boundary)
-            .enter()
-            .append("circle");
-
-
-    vertices
-
-        .attr(
-            "class",
-            "boundary-vertex"
-        )
-
-        .attr(
-            "r",
-            (d, i) =>
-                i === 0
-                    ? 7
-                    : 5
-        )
-
-        .attr(
-            "cx",
-            d => d.x
-        )
-
-        .attr(
-            "cy",
-            d => d.y
-        );
-
-
-    // --------------------------------------------------------
-    // Drag boundary vertices
-    // --------------------------------------------------------
-
-    if (!cityClosed) {
-
-        vertices.call(
-
-            d3.drag()
-
-                .on(
-                    "start",
-                    function () {
-
-                        d3
-                            .select(this)
-                            .raise();
-                    }
-                )
-
-                .on(
-                    "drag",
-                    function (
-                        event,
-                        point
-                    ) {
-
-                        point.x =
-                            Math.max(
-                                0,
-                                Math.min(
-                                    WORLD_WIDTH,
-                                    event.x
-                                )
-                            );
-
-
-                        point.y =
-                            Math.max(
-                                0,
-                                Math.min(
-                                    WORLD_HEIGHT,
-                                    event.y
-                                )
-                            );
-
-
-                        d3
-                            .select(this)
-                            .attr(
-                                "cx",
-                                point.x
-                            )
-                            .attr(
-                                "cy",
-                                point.y
-                            );
-
-
-                        drawBoundary();
-                    }
-                )
-
-                .on(
-                    "end",
-                    function () {
-
-                        updateCityPoints();
-
-                        draw();
-
-                    }
-                )
-        );
-    }
-}
-
-
-// ============================================================
-// DRAW POINTS
-// ============================================================
-
-function drawPoints() {
-
-    pointLayer
-        .selectAll("*")
-        .remove();
-
-
-    const pointsToDraw =
-        cityClosed
-            ? cityPoints
-            : allPoints;
-
-
-    pointLayer
-        .selectAll("circle")
-        .data(
-            pointsToDraw
-        )
-        .enter()
-        .append("circle")
-
-        .attr(
-            "class",
-            cityClosed
-                ? "city-point"
-                : "sample-point"
-        )
-
-        .attr(
-            "cx",
-            d => d.x
-        )
-
-        .attr(
-            "cy",
-            d => d.y
-        )
-
-        /*
-            IMPORTANT:
-
-            Radius is expressed in SCREEN pixels.
-
-            Since the entire world scales when zooming,
-            we compensate by dividing by zoomScale.
-
-            So:
-
-                zoom in 2x
-                    radius = original / 2
-
-                zoom in 4x
-                    radius = original / 4
-        */
-
-        .attr(
-            "r",
-            cityClosed
-                ? 2.5 / zoomScale
-                : 2 / zoomScale
-        );
-}
-
-
-// ============================================================
-// DRAW VORONOI
-// ============================================================
-
-function drawVoronoi() {
-
-    voronoiLayer
-        .selectAll("*")
-        .remove();
-
-
-    voronoiLayer
-        .attr(
-            "clip-path",
-            null
-        );
-
-
-    if (!showVoronoi) {
-
-        return;
-    }
-
-
-    const points =
-        cityClosed
-            ? cityPoints
-            : allPoints;
-
-
-    if (
-        points.length < 2
-    ) {
-
-        return;
-    }
-
-
-    const delaunay =
-        d3.Delaunay.from(
-            points,
-
-            d => d.x,
-
-            d => d.y
-        );
-
-
-    const voronoi =
-        delaunay.voronoi([
-
-            0,
-            0,
-
-            WORLD_WIDTH,
-            WORLD_HEIGHT
-
-        ]);
-
-
-    // --------------------------------------------------------
-    // Clip to city
-    // --------------------------------------------------------
-
-    if (
-        cityClosed &&
-        boundary.length >= 3
-    ) {
-
-        let defs =
-            svg.select("defs");
-
-
-        if (
-            defs.empty()
-        ) {
-
-            defs =
-                svg.append(
-                    "defs"
-                );
-        }
-
-
-        defs
-            .select("#cityClip")
-            .remove();
-
-
-        defs
-            .append("clipPath")
-            .attr(
-                "id",
-                "cityClip"
-            )
-
-            .append("path")
-            .attr(
-                "d",
-                createBoundaryPath()
-            );
-
-
-        voronoiLayer
-            .attr(
-                "clip-path",
-                "url(#cityClip)"
-            );
-    }
-
-
-    // --------------------------------------------------------
-    // Draw cells
-    // --------------------------------------------------------
-
-    voronoiLayer
-        .selectAll("path")
-        .data(points)
-        .enter()
-        .append("path")
-
-        .attr(
-            "class",
-            "voronoi-cell"
-        )
-
-        .attr(
-            "d",
-            (d, i) =>
-                voronoi.renderCell(i)
         );
 }
 
@@ -964,160 +757,493 @@ function draw() {
 
 
 // ============================================================
-// CENTER WORLD
+// DRAW POINTS
 // ============================================================
 
-function centerWorld() {
+function drawPoints() {
 
-    const viewportWidth =
-        viewport.clientWidth;
-
-
-    const viewportHeight =
-        viewport.clientHeight;
+    const points =
+        cityClosed
+            ? cityPoints
+            : allPoints;
 
 
-    /*
-        Put the CENTER of the image at
-        the CENTER of the screen.
-    */
-
-    cameraX =
-        (
-            viewportWidth -
-            WORLD_WIDTH * zoomScale
-        ) / 2;
+    const circles =
+        pointLayer
+            .selectAll("circle")
+            .data(
+                points,
+                d => `${d[0]}-${d[1]}`
+            );
 
 
-    cameraY =
-        (
-            viewportHeight -
-            WORLD_HEIGHT * zoomScale
-        ) / 2;
-
-
-    updateCamera();
-}
-
-
-// ============================================================
-// APPLY CAMERA
-// ============================================================
-
-function updateCamera() {
-
-    world.style.transform =
-
-        `translate(
-            ${cameraX}px,
-            ${cameraY}px
+    circles
+        .join("circle")
+        .attr(
+            "class",
+            cityClosed
+                ? "city-point"
+                : "sample-point"
         )
-        scale(
-            ${zoomScale}
-        )`;
-
-
-    /*
-        Point radii and other screen-space
-        properties depend on zoom.
-    */
-
-    drawPoints();
+        .attr(
+            "cx",
+            d => d[0]
+        )
+        .attr(
+            "cy",
+            d => d[1]
+        )
+        .attr(
+            "r",
+            cityClosed
+                ? 2.5 / zoomScale
+                : 2 / zoomScale
+        );
 }
+
+
+// ============================================================
+// DRAW CITY BOUNDARY
+// ============================================================
+
+function drawBoundary() {
+
+    boundaryLayer
+        .selectAll("*")
+        .remove();
+
+
+    vertexLayer
+        .selectAll("*")
+        .remove();
+
+
+    if (boundary.length === 0) {
+        return;
+    }
+
+
+    // --------------------------------------------
+    // Boundary line
+    // --------------------------------------------
+
+    if (boundary.length >= 2) {
+
+        const path =
+            boundaryLayer
+                .append("path")
+                .attr(
+                    "class",
+                    "city-boundary"
+                )
+                .attr(
+                    "d",
+                    cityClosed
+                        ? createBoundaryPath()
+                        : d3.line()
+                            .x(d => d[0])
+                            .y(d => d[1])
+                            .curve(
+                                d3.curveCatmullRom
+                                    .alpha(0.5)
+                            )(boundary)
+                );
+
+
+        if (cityClosed) {
+
+            path.attr(
+                "clip-path",
+                "none"
+            );
+        }
+    }
+
+
+    // --------------------------------------------
+    // Editing vertices
+    // --------------------------------------------
+
+    if (!cityClosed) {
+
+        vertexLayer
+            .selectAll("circle")
+            .data(boundary)
+            .join("circle")
+            .attr(
+                "class",
+                "boundary-vertex"
+            )
+            .attr(
+                "cx",
+                d => d[0]
+            )
+            .attr(
+                "cy",
+                d => d[1]
+            )
+            .attr(
+                "r",
+                5 / zoomScale
+            )
+            .call(
+                d3.drag()
+                    .on(
+                        "start",
+                        function(event) {
+
+                            d3.select(this)
+                                .raise();
+                        }
+                    )
+                    .on(
+                        "drag",
+                        function(
+                            event,
+                            d
+                        ) {
+
+                            /*
+                                event.clientX/Y gives actual
+                                screen position.
+
+                                Convert that back into world
+                                coordinates so dragging works
+                                correctly even when zoomed.
+                            */
+
+                            const rect =
+                                viewport
+                                    .getBoundingClientRect();
+
+
+                            const screenX =
+                                event.sourceEvent.clientX -
+                                rect.left;
+
+                            const screenY =
+                                event.sourceEvent.clientY -
+                                rect.top;
+
+
+                            d[0] =
+                                (
+                                    screenX -
+                                    cameraX
+                                ) / zoomScale;
+
+
+                            d[1] =
+                                (
+                                    screenY -
+                                    cameraY
+                                ) / zoomScale;
+
+
+                            drawBoundary();
+
+                            drawVoronoi();
+                        }
+                    )
+            );
+    }
+}
+
+
+// ============================================================
+// DRAW VORONOI
+// ============================================================
+
+function drawVoronoi() {
+
+    voronoiLayer
+        .selectAll("*")
+        .remove();
+
+
+    if (!showVoronoi) {
+        return;
+    }
+
+
+    const points =
+        cityClosed
+            ? cityPoints
+            : allPoints;
+
+
+    if (points.length < 2) {
+        return;
+    }
+
+
+    const delaunay =
+        d3.Delaunay.from(
+            points,
+            d => d[0],
+            d => d[1]
+        );
+
+
+    const voronoi =
+        delaunay.voronoi([
+            0,
+            0,
+            WORLD_WIDTH,
+            WORLD_HEIGHT
+        ]);
+
+
+    // --------------------------------------------
+    // Clip Voronoi to city boundary
+    // --------------------------------------------
+
+    if (
+        cityClosed &&
+        boundary.length >= 3
+    ) {
+
+        cityClipPath
+            .attr(
+                "d",
+                createBoundaryPath()
+            );
+
+
+        voronoiLayer
+            .attr(
+                "clip-path",
+                "url(#cityClip)"
+            );
+
+    } else {
+
+        voronoiLayer
+            .attr(
+                "clip-path",
+                null
+            );
+    }
+
+
+    // --------------------------------------------
+    // Draw cells
+    // --------------------------------------------
+
+    voronoiLayer
+        .selectAll("path")
+        .data(points)
+        .join("path")
+        .attr(
+            "class",
+            "voronoi-cell"
+        )
+        .attr(
+            "d",
+            (_, i) =>
+                voronoi.renderCell(i)
+        );
+}
+
+
+// ============================================================
+// ADD BOUNDARY POINT
+// ============================================================
+
+svg.on(
+    "click",
+    function(event) {
+
+        if (cityClosed) {
+            return;
+        }
+
+
+        // Ignore clicking directly on a vertex
+        if (
+            event.target.classList &&
+            event.target.classList.contains(
+                "boundary-vertex"
+            )
+        ) {
+            return;
+        }
+
+
+        const [x, y] =
+            screenToWorld(event);
+
+
+        // --------------------------------------------
+        // Keep points inside image
+        // --------------------------------------------
+
+        if (
+            x < 0 ||
+            x > WORLD_WIDTH ||
+            y < 0 ||
+            y > WORLD_HEIGHT
+        ) {
+            return;
+        }
+
+
+        // --------------------------------------------
+        // Close if clicking near first point
+        // --------------------------------------------
+
+        if (
+            boundary.length >= 3
+        ) {
+
+            const first =
+                boundary[0];
+
+
+            const dx =
+                first[0] - x;
+
+            const dy =
+                first[1] - y;
+
+
+            const distance =
+                Math.sqrt(
+                    dx * dx +
+                    dy * dy
+                );
+
+
+            // Screen-space threshold
+            const closeDistance =
+                15 / zoomScale;
+
+
+            if (
+                distance <
+                closeDistance
+            ) {
+
+                closeCity();
+
+                return;
+            }
+        }
+
+
+        boundary.push([x, y]);
+
+        drawBoundary();
+
+        status.textContent =
+            `${boundary.length} boundary points. ` +
+            `Click near the first point to close the city.`;
+    }
+);
+
+
+// ============================================================
+// CLOSE CITY
+// ============================================================
+
+function closeCity() {
+
+    if (boundary.length < 3) {
+
+        status.textContent =
+            "You need at least 3 boundary points.";
+
+        return;
+    }
+
+
+    cityClosed = true;
+
+
+    updateCityPoints();
+
+
+    draw();
+
+
+    status.textContent =
+        `City closed. ${cityPoints.length} ` +
+        `of ${allPoints.length} points are inside the city.`;
+}
+
+
+closeBtn.addEventListener(
+    "click",
+    closeCity
+);
+
+
+// ============================================================
+// GENERATE BUTTON
+// ============================================================
+
+generateBtn.addEventListener(
+    "click",
+    generatePoints
+);
+
+
+// ============================================================
+// VORONOI TOGGLE
+// ============================================================
+
+voronoiToggle.addEventListener(
+    "change",
+    function() {
+
+        showVoronoi =
+            this.checked;
+
+        drawVoronoi();
+    }
+);
+
+
+// ============================================================
+// RESET
+// ============================================================
+
+resetBtn.addEventListener(
+    "click",
+    function() {
+
+        boundary = [];
+
+        cityPoints = [];
+
+        cityClosed = false;
+
+        showVoronoi = false;
+
+        voronoiToggle.checked = false;
+
+
+        zoomScale = 1;
+
+
+        centerWorld();
+
+        generatePoints();
+
+
+        status.textContent =
+            "Reset.";
+    }
+);
 
 
 // ============================================================
 // ZOOM
 // ============================================================
 
-function zoomAt(
-    mouseX,
-    mouseY,
-    factor
-) {
-
-    const oldScale =
-        zoomScale;
-
-
-    const newScale =
-        Math.max(
-            0.1,
-            Math.min(
-                20,
-                zoomScale *
-                factor
-            )
-        );
-
-
-    if (
-        newScale === oldScale
-    ) {
-
-        return;
-    }
-
-
-    /*
-        World coordinate underneath
-        mouse cursor before zoom.
-    */
-
-    const worldX =
-        (
-            mouseX -
-            cameraX
-        )
-        /
-        oldScale;
-
-
-    const worldY =
-        (
-            mouseY -
-            cameraY
-        )
-        /
-        oldScale;
-
-
-    zoomScale =
-        newScale;
-
-
-    /*
-        Keep the same world coordinate
-        underneath the cursor.
-    */
-
-    cameraX =
-        mouseX -
-        worldX *
-        zoomScale;
-
-
-    cameraY =
-        mouseY -
-        worldY *
-        zoomScale;
-
-
-    updateCamera();
-
-    drawVoronoi();
-
-    drawBoundary();
-}
-
-
-// ============================================================
-// MOUSE WHEEL ZOOM
-// ============================================================
-
 viewport.addEventListener(
     "wheel",
-    event => {
+    function(event) {
 
         event.preventDefault();
 
@@ -1130,23 +1256,68 @@ viewport.addEventListener(
             event.clientX -
             rect.left;
 
-
         const mouseY =
             event.clientY -
             rect.top;
 
 
-        const factor =
-            event.deltaY < 0
-                ? 1.15
-                : 1 / 1.15;
+        // --------------------------------------------
+        // Find world coordinate under mouse
+        // --------------------------------------------
+
+        const worldX =
+            (
+                mouseX -
+                cameraX
+            ) / zoomScale;
 
 
-        zoomAt(
-            mouseX,
-            mouseY,
-            factor
-        );
+        const worldY =
+            (
+                mouseY -
+                cameraY
+            ) / zoomScale;
+
+
+        // --------------------------------------------
+        // Zoom
+        // --------------------------------------------
+
+        if (event.deltaY < 0) {
+
+            zoomScale *= 1.15;
+
+        } else {
+
+            zoomScale /= 1.15;
+        }
+
+
+        zoomScale =
+            Math.max(
+                0.1,
+                Math.min(
+                    20,
+                    zoomScale
+                )
+            );
+
+
+        // --------------------------------------------
+        // Keep mouse position fixed
+        // --------------------------------------------
+
+        cameraX =
+            mouseX -
+            worldX * zoomScale;
+
+        cameraY =
+            mouseY -
+            worldY * zoomScale;
+
+
+        updateCamera();
+
     },
     {
         passive: false
@@ -1155,346 +1326,43 @@ viewport.addEventListener(
 
 
 // ============================================================
-// GENERATE POINTS
+// WINDOW RESIZE
 // ============================================================
 
-function generatePoints() {
+window.addEventListener(
+    "resize",
+    function() {
 
-    updateSliderLabels();
+        // Keep the world centered when
+        // the window changes size.
 
-
-    allPoints =
-        poissonDiscSampling(
-
-            WORLD_WIDTH,
-
-            WORLD_HEIGHT,
-
-            getR(),
-
-            getK()
-
-        );
-
-
-    updateCityPoints();
-
-    draw();
-
-    updateStatus();
-}
-
-
-// ============================================================
-// CLOSE CITY
-// ============================================================
-
-function closeCity() {
-
-    if (
-        boundary.length < 3
-    ) {
-
-        alert(
-            "Select at least 3 boundary points."
-        );
-
-        return;
-    }
-
-
-    cityClosed = true;
-
-
-    updateCityPoints();
-
-    draw();
-
-    updateStatus();
-}
-
-
-// ============================================================
-// RESET
-// ============================================================
-
-function reset() {
-
-    boundary = [];
-
-    cityPoints = [];
-
-    cityClosed = false;
-
-    showVoronoi = false;
-
-
-    document
-        .getElementById(
-            "voronoiToggle"
-        )
-        .checked = false;
-
-
-    zoomScale = 1;
-
-
-    centerWorld();
-
-    generatePoints();
-}
-
-
-// ============================================================
-// SVG CLICK
-// ============================================================
-
-svg.on(
-    "click",
-    function (event) {
-
-        if (cityClosed) {
-
-            return;
-        }
-
-
-        if (
-            event.target.tagName ===
-            "circle"
-        ) {
-
-            return;
-        }
-
-
-        const [
-            x,
-            y
-        ] =
-            d3.pointer(
-                event,
-                this
-            );
-
-
-        // ----------------------------------------------------
-        // Close by clicking first vertex
-        // ----------------------------------------------------
-
-        if (
-            boundary.length >= 3
-        ) {
-
-            const first =
-                boundary[0];
-
-
-            const distance =
-                Math.hypot(
-                    x - first.x,
-                    y - first.y
-                );
-
-
-            if (
-                distance < 18
-            ) {
-
-                closeCity();
-
-                return;
-            }
-        }
-
-
-        boundary.push({
-
-            x,
-            y
-
-        });
-
-
-        drawBoundary();
-
-        updateStatus();
+        centerWorld();
     }
 );
 
 
 // ============================================================
-// SLIDERS
-// ============================================================
-
-document
-    .getElementById(
-        "rSlider"
-    )
-    .addEventListener(
-        "input",
-        () => {
-
-            generatePoints();
-        }
-    );
-
-
-document
-    .getElementById(
-        "kSlider"
-    )
-    .addEventListener(
-        "input",
-        () => {
-
-            generatePoints();
-        }
-    );
-
-
-// ============================================================
-// BUTTONS
-// ============================================================
-
-document
-    .getElementById(
-        "generatePoints"
-    )
-    .addEventListener(
-        "click",
-        generatePoints
-    );
-
-
-document
-    .getElementById(
-        "closeCity"
-    )
-    .addEventListener(
-        "click",
-        closeCity
-    );
-
-
-document
-    .getElementById(
-        "reset"
-    )
-    .addEventListener(
-        "click",
-        reset
-    );
-
-
-// ============================================================
-// VORONOI TOGGLE
-// ============================================================
-
-document
-    .getElementById(
-        "voronoiToggle"
-    )
-    .addEventListener(
-        "change",
-        function () {
-
-            showVoronoi =
-                this.checked;
-
-
-            drawVoronoi();
-
-            updateStatus();
-        }
-    );
-
-
-// ============================================================
-// STATUS
-// ============================================================
-
-function updateStatus() {
-
-    let text =
-
-        `R=${getR()} · ` +
-        `K=${getK()} · ` +
-        `${allPoints.length} points`;
-
-
-    if (cityClosed) {
-
-        text +=
-            ` · ${cityPoints.length} inside city`;
-    }
-
-
-    if (showVoronoi) {
-
-        text +=
-            ` · Voronoi ON`;
-    }
-
-
-    text +=
-        ` · Zoom ${zoomScale.toFixed(2)}×`;
-
-
-    document
-        .getElementById(
-            "status"
-        )
-        .textContent = text;
-}
-
-
-// ============================================================
-// DRAGGABLE CONTROL WINDOW
+// DRAGGABLE CONTROL PANEL
 // ============================================================
 
 const controls =
-    document.getElementById(
-        "controls"
-    );
+    document.getElementById("controls");
+
+const controlsHeader =
+    document.getElementById("controls-header");
 
 
-const header =
-    document.getElementById(
-        "controls-header"
-    );
-
-
-let draggingControls =
-    false;
-
+let draggingControls = false;
 
 let dragOffsetX = 0;
-
 let dragOffsetY = 0;
 
 
-header.addEventListener(
+controlsHeader.addEventListener(
     "pointerdown",
-    event => {
+    function(event) {
 
-        /*
-            Don't start dragging if the user
-            somehow starts on a button/input.
-        */
-
-        if (
-            event.target.closest(
-                "button, input, label"
-            )
-        ) {
-
-            return;
-        }
-
-
-        draggingControls =
-            true;
+        draggingControls = true;
 
 
         const rect =
@@ -1505,25 +1373,23 @@ header.addEventListener(
             event.clientX -
             rect.left;
 
-
         dragOffsetY =
             event.clientY -
             rect.top;
 
 
-        header.setPointerCapture(
+        controlsHeader.setPointerCapture(
             event.pointerId
         );
     }
 );
 
 
-header.addEventListener(
+controlsHeader.addEventListener(
     "pointermove",
-    event => {
+    function(event) {
 
         if (!draggingControls) {
-
             return;
         }
 
@@ -1532,20 +1398,18 @@ header.addEventListener(
             event.clientX -
             dragOffsetX;
 
-
         let y =
             event.clientY -
             dragOffsetY;
 
 
-        /*
-            Keep the panel on screen.
-        */
+        // --------------------------------------------
+        // Keep panel inside browser window
+        // --------------------------------------------
 
         const maxX =
             window.innerWidth -
             controls.offsetWidth;
-
 
         const maxY =
             window.innerHeight -
@@ -1575,144 +1439,37 @@ header.addEventListener(
         controls.style.left =
             `${x}px`;
 
-
         controls.style.top =
             `${y}px`;
     }
 );
 
 
-header.addEventListener(
+controlsHeader.addEventListener(
     "pointerup",
-    event => {
+    function(event) {
 
-        draggingControls =
-            false;
+        draggingControls = false;
 
-
-        try {
-
-            header.releasePointerCapture(
-                event.pointerId
-            );
-
-        } catch (_) {}
+        controlsHeader.releasePointerCapture(
+            event.pointerId
+        );
     }
 );
 
 
 // ============================================================
-// WINDOW RESIZE
+// IMAGE LOADING
 // ============================================================
 
-window.addEventListener(
-    "resize",
-    () => {
+if (mapElement.complete) {
 
-        /*
-            Re-center only if the user hasn't
-            meaningfully zoomed/panned.
-        */
-
-        if (
-            zoomScale === 1
-        ) {
-
-            centerWorld();
-        }
-    }
-);
-
-
-// ============================================================
-// IMAGE INITIALIZATION
-// ============================================================
-
-function initializeFromImage() {
-
-    WORLD_WIDTH =
-        map.naturalWidth;
-
-
-    WORLD_HEIGHT =
-        map.naturalHeight;
-
-
-    if (
-        WORLD_WIDTH <= 0 ||
-        WORLD_HEIGHT <= 0
-    ) {
-
-        console.error(
-            "Invalid altitude map dimensions."
-        );
-
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // Set actual image dimensions
-    // --------------------------------------------------------
-
-    map.style.width =
-        `${WORLD_WIDTH}px`;
-
-
-    map.style.height =
-        `${WORLD_HEIGHT}px`;
-
-
-    // --------------------------------------------------------
-    // Set SVG dimensions
-    // --------------------------------------------------------
-
-    svg
-        .attr(
-            "width",
-            WORLD_WIDTH
-        )
-
-        .attr(
-            "height",
-            WORLD_HEIGHT
-        )
-
-        .attr(
-            "viewBox",
-            `0 0 ${WORLD_WIDTH} ${WORLD_HEIGHT}`
-        );
-
-
-    // --------------------------------------------------------
-    // Center everything
-    // --------------------------------------------------------
-
-    centerWorld();
-
-
-    // --------------------------------------------------------
-    // Generate
-    // --------------------------------------------------------
-
-    generatePoints();
-}
-
-
-// ============================================================
-// WAIT FOR MAP
-// ============================================================
-
-if (
-    map.complete
-) {
-
-    initializeFromImage();
+    initializeMap();
 
 } else {
 
-    map.addEventListener(
+    mapElement.addEventListener(
         "load",
-        initializeFromImage
+        initializeMap
     );
 }
