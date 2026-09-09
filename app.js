@@ -1,6 +1,20 @@
 // ============================================================
 // AI CITY PLANNER
 // ============================================================
+//
+// NOTE on map pixel access (buildMapImageData / viridisLookup):
+// This project reads pixel data off the altitude-map <img> via
+// canvas.getImageData(). That call throws a SecurityError if
+// the image is considered "tainted" by CORS - which happens if
+// you open index.html directly via a file:// URL, or serve it
+// from a host that doesn't send appropriate CORS headers for
+// the image. If that happens, relaxation silently falls back
+// to being elevation-unaware (flat 0.5 blueness everywhere).
+//
+// To avoid this: serve the project over http(s) (e.g. a local
+// dev server like `npx serve` or `python -m http.server`)
+// rather than opening the HTML file directly.
+// ============================================================
 
 // ------------------------------------------------------------
 // DOM
@@ -127,13 +141,21 @@ const LERP_AMOUNT = 0.2;
 // colormap (dark blue/purple = low values, yellow = high
 // values). To weight relaxation toward blue and away from
 // yellow, we read the map's pixels into an offscreen canvas
-// once, then for any world (x, y) can look up its color and
-// match it against a precomputed viridis lookup table to
-// estimate where along the 0-1 viridis gradient that pixel
-// sits.
+// once, then precompute a per-pixel lookup of where each
+// pixel's color sits along the viridis gradient (0 = blue/
+// purple end, 1 = yellow end).
+//
+// This lookup used to be computed on-demand (nearest-neighbor
+// scan over a 256-entry table, per pixel, per call) inside
+// getViridisTAt, which was called for every vertex of every
+// Voronoi cell on every relaxation iteration - a lot of
+// redundant scanning of the same handful of pixels. Now it's
+// computed once per map load (buildViridisLookup) and reads
+// are a plain O(1) array index.
 // ============================================================
 
 let mapImageData = null;
+let viridisLookup = null; // Float32Array, one t-value per pixel
 
 const VIRIDIS_STEPS = 256;
 let viridisTable = null;
@@ -167,6 +189,11 @@ function buildMapImageData() {
                 WORLD_HEIGHT
             );
 
+        // Precompute viridis-t for every pixel ONCE, so
+        // relaxation just does an O(1) array lookup instead
+        // of a 256-entry nearest-neighbor scan per call.
+        buildViridisLookup();
+
     } catch (err) {
 
         console.error(
@@ -180,7 +207,15 @@ function buildMapImageData() {
             "weighting (relaxation will be unweighted)."
         );
 
+        // Surface this in the UI too, not just the log panel -
+        // it silently changes relaxation behavior and is easy
+        // to miss if you're not watching the log.
+        status.textContent =
+            "Warning: map pixels unreadable (CORS?). " +
+            "Relaxation will ignore elevation.";
+
         mapImageData = null;
+        viridisLookup = null;
     }
 }
 
@@ -243,12 +278,52 @@ function nearestViridisT(r, g, b) {
     return bestT;
 }
 
+// Builds a WORLD_WIDTH x WORLD_HEIGHT lookup of viridis-t
+// values, computed once per map load. This is the expensive
+// O(pixels * 256) pass, but it only runs once instead of
+// once per vertex per cell per relaxation iteration.
+function buildViridisLookup() {
+
+    if (!viridisTable) {
+        buildViridisTable();
+    }
+
+    const pixelCount =
+        WORLD_WIDTH * WORLD_HEIGHT;
+
+    viridisLookup =
+        new Float32Array(pixelCount);
+
+    const data =
+        mapImageData.data;
+
+    for (
+        let i = 0;
+        i < pixelCount;
+        i++
+    ) {
+
+        const offset = i * 4;
+
+        viridisLookup[i] =
+            nearestViridisT(
+                data[offset],
+                data[offset + 1],
+                data[offset + 2]
+            );
+    }
+
+    logStep(
+        `Precomputed viridis lookup for ${pixelCount} pixels.`
+    );
+}
+
 // Returns the viridis position (0 = blue, 1 = yellow) of the
 // map pixel under the given world coordinate. Falls back to a
 // neutral 0.5 if pixel data isn't available.
 function getViridisTAt(x, y) {
 
-    if (!mapImageData) {
+    if (!viridisLookup) {
         return 0.5;
     }
 
@@ -264,17 +339,7 @@ function getViridisTAt(x, y) {
             Math.max(0, Math.round(y))
         );
 
-    const index =
-        (py * WORLD_WIDTH + px) * 4;
-
-    const data =
-        mapImageData.data;
-
-    return nearestViridisT(
-        data[index],
-        data[index + 1],
-        data[index + 2]
-    );
+    return viridisLookup[py * WORLD_WIDTH + px];
 }
 
 
