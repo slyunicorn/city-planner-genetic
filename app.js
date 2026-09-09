@@ -591,29 +591,45 @@ function drawPoints() {
 
     pointLayer.selectAll("*").remove();
 
-
     if (!points.length) {
         return;
     }
 
+    let visiblePoints = points;
 
+    // Once city is closed, only show points INSIDE
+    // the actual curved city boundary.
+    if (cityClosed && boundaryPoints.length >= 3) {
+
+        const splinePoints =
+            createSplinePoints(
+                boundaryPoints,
+                25
+            );
+
+        visiblePoints =
+            points.filter(p =>
+                d3.polygonContains(
+                    splinePoints.map(q => [q.x, q.y]),
+                    [p.x, p.y]
+                )
+            );
+    }
+
+    // Keep dots a constant size on screen.
     const radius =
         Math.max(
             1.5,
-            2.5 / zoomScale
+            3 / zoomScale
         );
-
 
     pointLayer
         .selectAll("circle")
-        .data(points)
+        .data(visiblePoints)
         .join("circle")
-
         .attr("class", "sample-point")
-
         .attr("cx", d => d.x)
         .attr("cy", d => d.y)
-
         .attr("r", radius);
 }
 
@@ -1071,10 +1087,10 @@ viewport.addEventListener(
 
 
                 drawBoundary();
-
+		drawPoints();
 
                 status.textContent =
-                    "City boundary closed.";
+                    "City boundary closed. Points outside the city are hidden.";
 
 
                 drawVoronoi();
