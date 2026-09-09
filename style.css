@@ -144,6 +144,33 @@ body {
 
 
 /* =========================================================
+   FACILITIES
+   ========================================================= */
+
+.facility-cell {
+    fill: rgba(255, 60, 60, 0.06);
+
+    stroke: #ff3b3b;
+    stroke-width: 2;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+.facility-point {
+    fill: #ff3b3b;
+
+    stroke: white;
+    stroke-width: 1.5;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+
+/* =========================================================
    CONTROLS
    ========================================================= */
 
@@ -266,6 +293,76 @@ button:disabled {
 
 button:disabled:hover {
     background: #333;
+}
+
+
+/* =========================================================
+   SECTION DIVIDER
+   ========================================================= */
+
+.section-divider {
+    margin: 14px 12px 2px;
+
+    padding-top: 10px;
+
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+
+    font-size: 11px;
+
+    letter-spacing: 0.08em;
+
+    text-transform: uppercase;
+
+    color: #ff8a8a;
+}
+
+
+/* =========================================================
+   METRIC
+   ========================================================= */
+
+#metric {
+    margin: 12px;
+
+    padding: 10px;
+
+    background: rgba(255, 60, 60, 0.08);
+
+    border: 1px solid rgba(255, 60, 60, 0.25);
+
+    border-radius: 6px;
+}
+
+#metricLabel {
+    font-size: 10px;
+
+    letter-spacing: 0.08em;
+
+    text-transform: uppercase;
+
+    color: #ff8a8a;
+}
+
+#metricScore {
+    font-size: 26px;
+
+    font-weight: bold;
+
+    line-height: 1.2;
+
+    color: #fff;
+}
+
+#metricDetail {
+    margin-top: 4px;
+
+    font-size: 11px;
+
+    line-height: 1.45;
+
+    color: #aaa;
+
+    white-space: pre-line;
 }
 
 

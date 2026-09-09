@@ -1,20 +1,6 @@
 // ============================================================
 // AI CITY PLANNER
 // ============================================================
-//
-// NOTE on map pixel access (buildMapImageData / viridisLookup):
-// This project reads pixel data off the altitude-map <img> via
-// canvas.getImageData(). That call throws a SecurityError if
-// the image is considered "tainted" by CORS - which happens if
-// you open index.html directly via a file:// URL, or serve it
-// from a host that doesn't send appropriate CORS headers for
-// the image. If that happens, relaxation silently falls back
-// to being elevation-unaware (flat 0.5 blueness everywhere).
-//
-// To avoid this: serve the project over http(s) (e.g. a local
-// dev server like `npx serve` or `python -m http.server`)
-// rather than opening the HTML file directly.
-// ============================================================
 
 // ------------------------------------------------------------
 // DOM
@@ -28,6 +14,8 @@ const svg = d3.select("#viz");
 const voronoiLayer = d3.select("#voronoiLayer");
 const boundaryLayer = d3.select("#boundaryLayer");
 const pointLayer = d3.select("#pointLayer");
+const facilityVoronoiLayer = d3.select("#facilityVoronoiLayer");
+const facilityPointLayer = d3.select("#facilityPointLayer");
 const vertexLayer = d3.select("#vertexLayer");
 
 const cityClipPath = d3.select("#cityClipPath");
@@ -46,7 +34,19 @@ const relaxIterationsSlider = document.getElementById("relaxIterationsSlider");
 const relaxIterationsValue = document.getElementById("relaxIterationsValue");
 const relaxBtn = document.getElementById("relaxBtn");
 
+const facilityRSlider = document.getElementById("facilityRSlider");
+const facilityRValue = document.getElementById("facilityRValue");
+const placeFacilitiesBtn = document.getElementById("placeFacilitiesBtn");
+
+const epochsSlider = document.getElementById("epochsSlider");
+const epochsValue = document.getElementById("epochsValue");
+const optimizeBtn = document.getElementById("optimizeBtn");
+
 const voronoiToggle = document.getElementById("voronoiToggle");
+const facilityToggle = document.getElementById("facilityToggle");
+
+const metricScore = document.getElementById("metricScore");
+const metricDetail = document.getElementById("metricDetail");
 
 const status = document.getElementById("status");
 
@@ -134,6 +134,31 @@ const LERP_AMOUNT = 0.2;
 
 
 // ============================================================
+// FACILITY LAYER STATE
+// ============================================================
+//
+// A second, much sparser Poisson-disc point set laid over the
+// city. Each of these points is an essential facility (fire
+// station, hospital, ...) and gets its own Voronoi cell - the
+// area that facility serves. These are the ONLY points moved
+// during optimization; the fine-grained block points stay put
+// and act as the "demand" the metric is measured against.
+// ============================================================
+
+let facilityPoints = [];
+
+let optimizing = false;
+
+// Latest evaluated metric, kept so the UI and the optimizer
+// can both read it without recomputing.
+let currentMetric = null;
+
+// Adaptive move size for the optimizer. Grows while the score
+// keeps improving, shrinks when an epoch makes things worse.
+let facilityStepScale = 1;
+
+
+// ============================================================
 // MAP PIXEL SAMPLING (for viridis-weighted relaxation)
 // ============================================================
 //
@@ -141,21 +166,13 @@ const LERP_AMOUNT = 0.2;
 // colormap (dark blue/purple = low values, yellow = high
 // values). To weight relaxation toward blue and away from
 // yellow, we read the map's pixels into an offscreen canvas
-// once, then precompute a per-pixel lookup of where each
-// pixel's color sits along the viridis gradient (0 = blue/
-// purple end, 1 = yellow end).
-//
-// This lookup used to be computed on-demand (nearest-neighbor
-// scan over a 256-entry table, per pixel, per call) inside
-// getViridisTAt, which was called for every vertex of every
-// Voronoi cell on every relaxation iteration - a lot of
-// redundant scanning of the same handful of pixels. Now it's
-// computed once per map load (buildViridisLookup) and reads
-// are a plain O(1) array index.
+// once, then for any world (x, y) can look up its color and
+// match it against a precomputed viridis lookup table to
+// estimate where along the 0-1 viridis gradient that pixel
+// sits.
 // ============================================================
 
 let mapImageData = null;
-let viridisLookup = null; // Float32Array, one t-value per pixel
 
 const VIRIDIS_STEPS = 256;
 let viridisTable = null;
@@ -189,11 +206,6 @@ function buildMapImageData() {
                 WORLD_HEIGHT
             );
 
-        // Precompute viridis-t for every pixel ONCE, so
-        // relaxation just does an O(1) array lookup instead
-        // of a 256-entry nearest-neighbor scan per call.
-        buildViridisLookup();
-
     } catch (err) {
 
         console.error(
@@ -207,15 +219,7 @@ function buildMapImageData() {
             "weighting (relaxation will be unweighted)."
         );
 
-        // Surface this in the UI too, not just the log panel -
-        // it silently changes relaxation behavior and is easy
-        // to miss if you're not watching the log.
-        status.textContent =
-            "Warning: map pixels unreadable (CORS?). " +
-            "Relaxation will ignore elevation.";
-
         mapImageData = null;
-        viridisLookup = null;
     }
 }
 
@@ -278,52 +282,12 @@ function nearestViridisT(r, g, b) {
     return bestT;
 }
 
-// Builds a WORLD_WIDTH x WORLD_HEIGHT lookup of viridis-t
-// values, computed once per map load. This is the expensive
-// O(pixels * 256) pass, but it only runs once instead of
-// once per vertex per cell per relaxation iteration.
-function buildViridisLookup() {
-
-    if (!viridisTable) {
-        buildViridisTable();
-    }
-
-    const pixelCount =
-        WORLD_WIDTH * WORLD_HEIGHT;
-
-    viridisLookup =
-        new Float32Array(pixelCount);
-
-    const data =
-        mapImageData.data;
-
-    for (
-        let i = 0;
-        i < pixelCount;
-        i++
-    ) {
-
-        const offset = i * 4;
-
-        viridisLookup[i] =
-            nearestViridisT(
-                data[offset],
-                data[offset + 1],
-                data[offset + 2]
-            );
-    }
-
-    logStep(
-        `Precomputed viridis lookup for ${pixelCount} pixels.`
-    );
-}
-
 // Returns the viridis position (0 = blue, 1 = yellow) of the
 // map pixel under the given world coordinate. Falls back to a
 // neutral 0.5 if pixel data isn't available.
 function getViridisTAt(x, y) {
 
-    if (!viridisLookup) {
+    if (!mapImageData) {
         return 0.5;
     }
 
@@ -339,7 +303,17 @@ function getViridisTAt(x, y) {
             Math.max(0, Math.round(y))
         );
 
-    return viridisLookup[py * WORLD_WIDTH + px];
+    const index =
+        (py * WORLD_WIDTH + px) * 4;
+
+    const data =
+        mapImageData.data;
+
+    return nearestViridisT(
+        data[index],
+        data[index + 1],
+        data[index + 2]
+    );
 }
 
 
@@ -878,6 +852,8 @@ function draw() {
     drawBoundary();
 
     drawVoronoi();
+
+    drawFacilities();
 
 }
 
@@ -1594,6 +1570,726 @@ function stopRelaxation() {
 
 
 // ============================================================
+// PLACE FACILITIES
+// ============================================================
+//
+// Runs Poisson-disc sampling a second time with a much larger
+// radius, restricted to the city's bounding box, then keeps
+// only the samples that land inside the city boundary. Each
+// surviving sample becomes one essential facility.
+// ============================================================
+
+function placeFacilities() {
+
+    if (!cityClosed || boundaryPoints.length < 3) {
+        return;
+    }
+
+    const extent =
+        getVoronoiExtent();
+
+    const boxWidth =
+        extent[2] - extent[0];
+
+    const boxHeight =
+        extent[3] - extent[1];
+
+    const facilityR =
+        Number(facilityRSlider.value);
+
+    // Sample within the city's bounding box, then shift the
+    // results back into world coordinates.
+    const raw =
+        poissonDiscSampling(
+            boxWidth,
+            boxHeight,
+            facilityR,
+            K
+        );
+
+    const cityPolygon =
+        getBoundaryPolygonPoints(200)
+            .map(q => [q.x, q.y]);
+
+    facilityPoints =
+        raw
+            .map(p => ({
+                x: p.x + extent[0],
+                y: p.y + extent[1]
+            }))
+            .filter(p =>
+                d3.polygonContains(
+                    cityPolygon,
+                    [p.x, p.y]
+                )
+            );
+
+    facilityStepScale = 1;
+
+    drawFacilities();
+
+    evaluateMetric();
+
+    logStep(
+        `Placed ${facilityPoints.length} facilities ` +
+        `(spacing ${facilityR}).`
+    );
+
+    status.textContent =
+        `${facilityPoints.length} facilities placed. ` +
+        `Run epochs to optimize their positions.`;
+
+    optimizeBtn.disabled =
+        facilityPoints.length < 2;
+}
+
+
+// ============================================================
+// DRAW FACILITIES
+// ============================================================
+
+function drawFacilities() {
+
+    facilityVoronoiLayer.selectAll("*").remove();
+    facilityPointLayer.selectAll("*").remove();
+
+    if (!facilityToggle.checked) {
+        return;
+    }
+
+    if (!facilityPoints.length) {
+        return;
+    }
+
+    // --------------------------------------------------------
+    // Facility service areas (the "bigger" Voronoi diagram),
+    // drawn in red and overlaid on the block-level diagram.
+    // --------------------------------------------------------
+
+    if (facilityPoints.length >= 2) {
+
+        const delaunay =
+            d3.Delaunay.from(
+                facilityPoints,
+                d => d.x,
+                d => d.y
+            );
+
+        const voronoi =
+            delaunay.voronoi(
+                getVoronoiExtent()
+            );
+
+        const group =
+            facilityVoronoiLayer
+                .append("g");
+
+        if (cityClosed) {
+
+            group.attr(
+                "clip-path",
+                "url(#cityClip)"
+            );
+        }
+
+        for (
+            let i = 0;
+            i < facilityPoints.length;
+            i++
+        ) {
+
+            const cell =
+                voronoi.cellPolygon(i);
+
+            if (!cell) {
+                continue;
+            }
+
+            group
+                .append("path")
+                .attr(
+                    "class",
+                    "facility-cell"
+                )
+                .attr(
+                    "d",
+                    "M" +
+                    cell
+                        .map(p => `${p[0]},${p[1]}`)
+                        .join("L") +
+                    "Z"
+                );
+        }
+    }
+
+    // --------------------------------------------------------
+    // Facility markers
+    // --------------------------------------------------------
+
+    const radius =
+        Math.max(3, 6 / zoomScale);
+
+    facilityPointLayer
+        .selectAll("circle")
+        .data(facilityPoints)
+        .join("circle")
+        .attr("class", "facility-point")
+        .attr("cx", d => d.x)
+        .attr("cy", d => d.y)
+        .attr("r", radius);
+}
+
+
+// ============================================================
+// ASSIGN BLOCK POINTS TO FACILITIES
+// ============================================================
+//
+// Every block point belongs to whichever facility is nearest -
+// which is exactly the facility Voronoi cell it falls inside.
+// delaunay.find() gives that nearest index directly, so this
+// avoids any point-in-polygon work.
+// ============================================================
+
+function assignBlocksToFacilities() {
+
+    const blocks =
+        getInsideCityPoints();
+
+    const buckets =
+        facilityPoints.map(() => []);
+
+    if (!facilityPoints.length || !blocks.length) {
+        return { blocks, buckets };
+    }
+
+    const delaunay =
+        d3.Delaunay.from(
+            facilityPoints,
+            d => d.x,
+            d => d.y
+        );
+
+    let hint = 0;
+
+    for (const block of blocks) {
+
+        hint =
+            delaunay.find(
+                block.x,
+                block.y,
+                hint
+            );
+
+        buckets[hint].push(block);
+    }
+
+    return { blocks, buckets };
+}
+
+
+// ============================================================
+// MAX DISTANCE BETWEEN ANY TWO POINTS IN A CELL
+// ============================================================
+//
+// The farthest-apart pair always lies on the convex hull, so
+// hulling first turns a potentially huge O(n^2) scan into a
+// tiny one over just the hull vertices.
+// ============================================================
+
+function maxPairwiseDistance(cellPoints) {
+
+    if (cellPoints.length < 2) {
+        return 0;
+    }
+
+    const coords =
+        cellPoints.map(p => [p.x, p.y]);
+
+    const hull =
+        coords.length > 3
+            ? (d3.polygonHull(coords) || coords)
+            : coords;
+
+    let best = 0;
+
+    for (let i = 0; i < hull.length; i++) {
+
+        for (let j = i + 1; j < hull.length; j++) {
+
+            const dx = hull[i][0] - hull[j][0];
+            const dy = hull[i][1] - hull[j][1];
+
+            const dist =
+                Math.hypot(dx, dy);
+
+            if (dist > best) {
+                best = dist;
+            }
+        }
+    }
+
+    return best;
+}
+
+
+// ============================================================
+// METRIC
+// ============================================================
+//
+// Two things are measured per facility cell:
+//
+//   load   - how many block points (smaller polygons) fall
+//            inside this facility's larger polygon
+//   spread - the max distance between any two of those points,
+//            i.e. how far apart the extremes of the service
+//            area are
+//
+// A good city plan wants BOTH:
+//   - loads even across facilities, so no single hospital is
+//     serving triple the blocks of its neighbour
+//   - spreads small, so nowhere in a service area is far from
+//     its facility
+//
+// Each is turned into a 0..1 sub-score and blended into one
+// number that goes up as the plan gets better.
+// ============================================================
+
+const LOAD_WEIGHT = 0.5;
+const SPREAD_WEIGHT = 0.5;
+
+function computeMetric() {
+
+    if (facilityPoints.length < 2) {
+        return null;
+    }
+
+    const { blocks, buckets } =
+        assignBlocksToFacilities();
+
+    if (!blocks.length) {
+        return null;
+    }
+
+    const loads =
+        buckets.map(b => b.length);
+
+    const spreads =
+        buckets.map(b => maxPairwiseDistance(b));
+
+    // --------------------------------------------------------
+    // Load balance -> coefficient of variation
+    // --------------------------------------------------------
+
+    const meanLoad =
+        d3.mean(loads) || 0;
+
+    const loadDeviation =
+        meanLoad > 0
+            ? (d3.deviation(loads) || 0) / meanLoad
+            : 0;
+
+    const loadScore =
+        1 / (1 + loadDeviation);
+
+    // --------------------------------------------------------
+    // Spread, normalized against the city's own diagonal so
+    // the score means the same thing on any map size.
+    // --------------------------------------------------------
+
+    const extent =
+        getVoronoiExtent();
+
+    const cityDiagonal =
+        Math.hypot(
+            extent[2] - extent[0],
+            extent[3] - extent[1]
+        ) || 1;
+
+    const meanSpread =
+        d3.mean(spreads) || 0;
+
+    const worstSpread =
+        d3.max(spreads) || 0;
+
+    const spreadScore =
+        1 / (1 + (meanSpread / cityDiagonal));
+
+    // --------------------------------------------------------
+    // Combined score (higher is better)
+    // --------------------------------------------------------
+
+    const score =
+        100 *
+        (
+            LOAD_WEIGHT * loadScore +
+            SPREAD_WEIGHT * spreadScore
+        );
+
+    return {
+        score,
+        loadScore,
+        spreadScore,
+        loads,
+        spreads,
+        meanLoad,
+        loadDeviation,
+        meanSpread,
+        worstSpread,
+        buckets,
+        totalBlocks: blocks.length
+    };
+}
+
+
+function evaluateMetric() {
+
+    currentMetric = computeMetric();
+
+    updateMetricDisplay();
+
+    return currentMetric;
+}
+
+
+function updateMetricDisplay() {
+
+    if (!currentMetric) {
+
+        metricScore.textContent = "--";
+
+        metricDetail.textContent =
+            "Place facilities to measure.";
+
+        return;
+    }
+
+    metricScore.textContent =
+        currentMetric.score.toFixed(2);
+
+    const minLoad =
+        d3.min(currentMetric.loads);
+
+    const maxLoad =
+        d3.max(currentMetric.loads);
+
+    metricDetail.textContent =
+        `${currentMetric.buckets.length} facilities · ` +
+        `${currentMetric.totalBlocks} blocks\n` +
+        `load ${minLoad}-${maxLoad} ` +
+        `(avg ${currentMetric.meanLoad.toFixed(1)})\n` +
+        `spread avg ${currentMetric.meanSpread.toFixed(0)}px · ` +
+        `worst ${currentMetric.worstSpread.toFixed(0)}px`;
+}
+
+
+// ============================================================
+// ONE OPTIMIZATION EPOCH
+// ============================================================
+//
+// Moves ONLY the facility points. Two forces per facility:
+//
+//   1. Pull toward the centroid of the blocks it serves.
+//      This directly shrinks that cell's spread.
+//   2. Push/pull along each Delaunay neighbour based on the
+//      load difference. An overloaded facility drifts toward
+//      its lighter neighbours, which shrinks its own territory
+//      and grows theirs - evening the loads out.
+//
+// The epoch is then accepted only if the metric actually
+// improved. If it got worse the move is rolled back and the
+// step size is halved, so the score is monotonically
+// non-decreasing over epochs.
+// ============================================================
+
+const CENTROID_PULL = 0.5;
+const BALANCE_PULL = 0.35;
+
+function runEpoch() {
+
+    if (facilityPoints.length < 2) {
+        return false;
+    }
+
+    const before =
+        currentMetric || evaluateMetric();
+
+    if (!before) {
+        return false;
+    }
+
+    // Snapshot so a bad epoch can be rolled back.
+    const snapshot =
+        facilityPoints.map(p => ({
+            x: p.x,
+            y: p.y
+        }));
+
+    const delaunay =
+        d3.Delaunay.from(
+            facilityPoints,
+            d => d.x,
+            d => d.y
+        );
+
+    const cityPolygon =
+        getBoundaryPolygonPoints(200)
+            .map(q => [q.x, q.y]);
+
+    const meanLoad =
+        before.meanLoad || 1;
+
+    for (
+        let i = 0;
+        i < facilityPoints.length;
+        i++
+    ) {
+
+        const facility =
+            facilityPoints[i];
+
+        const served =
+            before.buckets[i];
+
+        let moveX = 0;
+        let moveY = 0;
+
+        // ----------------------------------------------------
+        // 1. Pull toward the centroid of served blocks
+        // ----------------------------------------------------
+
+        if (served.length) {
+
+            const centroidX =
+                d3.mean(served, p => p.x);
+
+            const centroidY =
+                d3.mean(served, p => p.y);
+
+            moveX +=
+                (centroidX - facility.x) *
+                CENTROID_PULL;
+
+            moveY +=
+                (centroidY - facility.y) *
+                CENTROID_PULL;
+        }
+
+        // ----------------------------------------------------
+        // 2. Load balancing against Delaunay neighbours
+        // ----------------------------------------------------
+
+        const myLoad =
+            before.loads[i];
+
+        for (const j of delaunay.neighbors(i)) {
+
+            const neighbor =
+                facilityPoints[j];
+
+            const loadGap =
+                (myLoad - before.loads[j]) /
+                meanLoad;
+
+            if (loadGap === 0) {
+                continue;
+            }
+
+            const dx =
+                neighbor.x - facility.x;
+
+            const dy =
+                neighbor.y - facility.y;
+
+            const dist =
+                Math.hypot(dx, dy);
+
+            if (dist < 1e-6) {
+                continue;
+            }
+
+            // Overloaded (loadGap > 0) -> drift toward the
+            // lighter neighbour, shedding territory to it.
+            moveX +=
+                (dx / dist) *
+                loadGap *
+                BALANCE_PULL *
+                dist *
+                0.1;
+
+            moveY +=
+                (dy / dist) *
+                loadGap *
+                BALANCE_PULL *
+                dist *
+                0.1;
+        }
+
+        const nextX =
+            facility.x + moveX * facilityStepScale;
+
+        const nextY =
+            facility.y + moveY * facilityStepScale;
+
+        // Facilities must stay inside the city.
+        if (
+            !cityPolygon.length ||
+            d3.polygonContains(
+                cityPolygon,
+                [nextX, nextY]
+            )
+        ) {
+            facility.x = nextX;
+            facility.y = nextY;
+        }
+    }
+
+    const after =
+        computeMetric();
+
+    if (!after || after.score < before.score) {
+
+        // Roll back and take smaller steps next time.
+        for (
+            let i = 0;
+            i < facilityPoints.length;
+            i++
+        ) {
+            facilityPoints[i].x = snapshot[i].x;
+            facilityPoints[i].y = snapshot[i].y;
+        }
+
+        facilityStepScale *= 0.5;
+
+        return false;
+    }
+
+    currentMetric = after;
+
+    facilityStepScale =
+        Math.min(2, facilityStepScale * 1.05);
+
+    updateMetricDisplay();
+
+    return true;
+}
+
+
+// ============================================================
+// RUN OPTIMIZATION OVER EPOCHS
+// ============================================================
+
+function startOptimization(epochs) {
+
+    if (optimizing) {
+        return;
+    }
+
+    if (facilityPoints.length < 2) {
+        return;
+    }
+
+    optimizing = true;
+
+    optimizeBtn.disabled = true;
+
+    facilityStepScale = 1;
+
+    const startScore =
+        (currentMetric || evaluateMetric()).score;
+
+    logStep(
+        `Optimization started (${epochs} epochs, ` +
+        `score ${startScore.toFixed(2)}).`
+    );
+
+    let epoch = 0;
+
+    function step() {
+
+        if (!optimizing || epoch >= epochs) {
+
+            optimizing = false;
+
+            optimizeBtn.disabled = false;
+
+            const endScore =
+                currentMetric
+                    ? currentMetric.score
+                    : startScore;
+
+            status.textContent =
+                `Optimization complete. ` +
+                `Score ${endScore.toFixed(2)}.`;
+
+            logStep(
+                `Optimization finished after ${epoch} epochs: ` +
+                `${startScore.toFixed(2)} -> ${endScore.toFixed(2)} ` +
+                `(${(endScore - startScore >= 0 ? "+" : "")}` +
+                `${(endScore - startScore).toFixed(2)}).`
+            );
+
+            return;
+        }
+
+        const improved =
+            runEpoch();
+
+        epoch++;
+
+        drawFacilities();
+
+        status.textContent =
+            `Epoch ${epoch}/${epochs} · ` +
+            `score ${currentMetric.score.toFixed(2)}`;
+
+        // Log periodically rather than every epoch, so the
+        // panel stays readable on long runs.
+        if (
+            epoch === 1 ||
+            epoch % 10 === 0 ||
+            epoch === epochs
+        ) {
+            logStep(
+                `Epoch ${epoch}: score ` +
+                `${currentMetric.score.toFixed(2)} ` +
+                `(load ${currentMetric.loadScore.toFixed(3)}, ` +
+                `spread ${currentMetric.spreadScore.toFixed(3)})`
+            );
+        }
+
+        // Steps have collapsed to nothing - we've converged.
+        if (!improved && facilityStepScale < 0.01) {
+
+            optimizing = false;
+
+            optimizeBtn.disabled = false;
+
+            status.textContent =
+                `Converged at epoch ${epoch} · ` +
+                `score ${currentMetric.score.toFixed(2)}`;
+
+            logStep(
+                `Converged early at epoch ${epoch} ` +
+                `(score ${currentMetric.score.toFixed(2)}).`
+            );
+
+            return;
+        }
+
+        requestAnimationFrame(step);
+    }
+
+    requestAnimationFrame(step);
+}
+
+
+function stopOptimization() {
+
+    optimizing = false;
+}
+
+
+// ============================================================
 // MAP CLICK
 // ============================================================
 
@@ -1684,6 +2380,7 @@ viewport.addEventListener(
 
 
                 relaxBtn.disabled = false;
+                placeFacilitiesBtn.disabled = false;
 
 
                 logStep(
@@ -1806,6 +2503,8 @@ viewport.addEventListener(
 
         drawVoronoi();
 
+        drawFacilities();
+
     },
     { passive: false }
 );
@@ -1820,8 +2519,21 @@ resetBtn.addEventListener(
     () => {
 
         stopRelaxation();
+        stopOptimization();
 
         relaxBtn.disabled = true;
+        placeFacilitiesBtn.disabled = true;
+        optimizeBtn.disabled = true;
+
+
+        facilityPoints = [];
+
+        currentMetric = null;
+
+        updateMetricDisplay();
+
+        facilityVoronoiLayer.selectAll("*").remove();
+        facilityPointLayer.selectAll("*").remove();
 
 
         boundaryPoints = [];
@@ -1959,6 +2671,67 @@ relaxBtn.addEventListener(
             );
 
         startRelaxation(iterations);
+    }
+);
+
+
+// ============================================================
+// FACILITY CONTROLS
+// ============================================================
+
+facilityRSlider.addEventListener(
+    "input",
+    () => {
+
+        facilityRValue.textContent =
+            facilityRSlider.value;
+    }
+);
+
+epochsSlider.addEventListener(
+    "input",
+    () => {
+
+        epochsValue.textContent =
+            epochsSlider.value;
+    }
+);
+
+placeFacilitiesBtn.addEventListener(
+    "click",
+    () => {
+
+        stopOptimization();
+
+        placeFacilities();
+    }
+);
+
+optimizeBtn.addEventListener(
+    "click",
+    () => {
+
+        const epochs =
+            Math.max(
+                1,
+                Number(epochsSlider.value) || 1
+            );
+
+        startOptimization(epochs);
+    }
+);
+
+facilityToggle.addEventListener(
+    "change",
+    () => {
+
+        drawFacilities();
+
+        logStep(
+            facilityToggle.checked
+                ? "Facility layer shown."
+                : "Facility layer hidden."
+        );
     }
 );
 

@@ -28,6 +28,8 @@
             <g id="voronoiLayer"></g>
             <g id="boundaryLayer"></g>
             <g id="pointLayer"></g>
+            <g id="facilityVoronoiLayer"></g>
+            <g id="facilityPointLayer"></g>
             <g id="vertexLayer"></g>
         </svg>
 
@@ -104,9 +106,60 @@
         Relax Points
     </button>
 
+    <div class="section-divider">Facilities</div>
+
+    <div class="control-section">
+        <label>
+            <span>Facility Spacing</span>
+            <span id="facilityRValue">90</span>
+        </label>
+
+        <input
+            id="facilityRSlider"
+            type="range"
+            min="20"
+            max="300"
+            value="90"
+        >
+    </div>
+
+    <button id="placeFacilitiesBtn" disabled>
+        Place Facilities
+    </button>
+
+    <div class="control-section">
+        <label>
+            <span>Epochs</span>
+            <span id="epochsValue">100</span>
+        </label>
+
+        <input
+            id="epochsSlider"
+            type="range"
+            min="1"
+            max="500"
+            value="100"
+        >
+    </div>
+
+    <button id="optimizeBtn" disabled>
+        Optimize City Plan
+    </button>
+
+    <div id="metric">
+        <div id="metricLabel">Score</div>
+        <div id="metricScore">--</div>
+        <div id="metricDetail">Place facilities to measure.</div>
+    </div>
+
     <label class="checkbox-row">
         <input id="voronoiToggle" type="checkbox">
         Show Voronoi Diagram
+    </label>
+
+    <label class="checkbox-row">
+        <input id="facilityToggle" type="checkbox" checked>
+        Show Facility Layer
     </label>
 
     <div id="status">
