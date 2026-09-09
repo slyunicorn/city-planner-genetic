@@ -28,9 +28,54 @@ const generateBtn = document.getElementById("generateBtn");
 const closeBtn = document.getElementById("closeBtn");
 const resetBtn = document.getElementById("resetBtn");
 
+const relaxIterationsSlider = document.getElementById("relaxIterationsSlider");
+const relaxIterationsValue = document.getElementById("relaxIterationsValue");
+const relaxBtn = document.getElementById("relaxBtn");
+
 const voronoiToggle = document.getElementById("voronoiToggle");
 
 const status = document.getElementById("status");
+
+const logList = document.getElementById("logList");
+
+
+// ============================================================
+// LOG PANEL
+// ============================================================
+
+function logStep(message) {
+
+    const time =
+        new Date().toLocaleTimeString(
+            [],
+            {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit"
+            }
+        );
+
+    const entry =
+        document.createElement("div");
+
+    entry.className = "log-entry";
+
+    const timeSpan =
+        document.createElement("span");
+
+    timeSpan.className = "log-time";
+    timeSpan.textContent = time;
+
+    entry.appendChild(timeSpan);
+    entry.appendChild(
+        document.createTextNode(message)
+    );
+
+    logList.appendChild(entry);
+
+    logList.scrollTop =
+        logList.scrollHeight;
+}
 
 
 // ============================================================
@@ -71,7 +116,166 @@ let K = Number(kSlider.value);
 
 let relaxing = false;
 
-const LERP_AMOUNT = 0.08;
+const LERP_AMOUNT = 0.2;
+
+
+// ============================================================
+// MAP PIXEL SAMPLING (for viridis-weighted relaxation)
+// ============================================================
+//
+// The altitude map is assumed to be colored with a viridis
+// colormap (dark blue/purple = low values, yellow = high
+// values). To weight relaxation toward blue and away from
+// yellow, we read the map's pixels into an offscreen canvas
+// once, then for any world (x, y) can look up its color and
+// match it against a precomputed viridis lookup table to
+// estimate where along the 0-1 viridis gradient that pixel
+// sits.
+// ============================================================
+
+let mapImageData = null;
+
+const VIRIDIS_STEPS = 256;
+let viridisTable = null;
+
+function buildMapImageData() {
+
+    try {
+
+        const canvas =
+            document.createElement("canvas");
+
+        canvas.width = WORLD_WIDTH;
+        canvas.height = WORLD_HEIGHT;
+
+        const ctx =
+            canvas.getContext("2d");
+
+        ctx.drawImage(
+            mapElement,
+            0,
+            0,
+            WORLD_WIDTH,
+            WORLD_HEIGHT
+        );
+
+        mapImageData =
+            ctx.getImageData(
+                0,
+                0,
+                WORLD_WIDTH,
+                WORLD_HEIGHT
+            );
+
+    } catch (err) {
+
+        console.error(
+            "Could not read map pixel data " +
+            "(likely blocked by CORS):",
+            err
+        );
+
+        logStep(
+            "Warning: couldn't read map pixels for viridis " +
+            "weighting (relaxation will be unweighted)."
+        );
+
+        mapImageData = null;
+    }
+}
+
+function buildViridisTable() {
+
+    viridisTable = [];
+
+    for (
+        let i = 0;
+        i < VIRIDIS_STEPS;
+        i++
+    ) {
+
+        const t =
+            i / (VIRIDIS_STEPS - 1);
+
+        const color =
+            d3.rgb(
+                d3.interpolateViridis(t)
+            );
+
+        viridisTable.push({
+            t,
+            r: color.r,
+            g: color.g,
+            b: color.b
+        });
+    }
+}
+
+// Given an RGB color, find the closest match in the viridis
+// gradient and return its position (0 = blue/purple end,
+// 1 = yellow end).
+function nearestViridisT(r, g, b) {
+
+    if (!viridisTable) {
+        buildViridisTable();
+    }
+
+    let bestT = 0.5;
+    let bestDist = Infinity;
+
+    for (const entry of viridisTable) {
+
+        const dr = entry.r - r;
+        const dg = entry.g - g;
+        const db = entry.b - b;
+
+        const dist =
+            dr * dr +
+            dg * dg +
+            db * db;
+
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestT = entry.t;
+        }
+    }
+
+    return bestT;
+}
+
+// Returns the viridis position (0 = blue, 1 = yellow) of the
+// map pixel under the given world coordinate. Falls back to a
+// neutral 0.5 if pixel data isn't available.
+function getViridisTAt(x, y) {
+
+    if (!mapImageData) {
+        return 0.5;
+    }
+
+    const px =
+        Math.min(
+            WORLD_WIDTH - 1,
+            Math.max(0, Math.round(x))
+        );
+
+    const py =
+        Math.min(
+            WORLD_HEIGHT - 1,
+            Math.max(0, Math.round(y))
+        );
+
+    const index =
+        (py * WORLD_WIDTH + px) * 4;
+
+    const data =
+        mapImageData.data;
+
+    return nearestViridisT(
+        data[index],
+        data[index + 1],
+        data[index + 2]
+    );
+}
 
 
 // ============================================================
@@ -90,6 +294,8 @@ function initialize() {
 
         status.textContent =
             "Could not determine map dimensions.";
+
+        logStep("Error: could not determine map dimensions.");
 
         console.error(
             "Map dimensions are invalid:",
@@ -146,6 +352,13 @@ function initialize() {
 
 
     // --------------------------------------------------------
+    // Read map pixels (for viridis-weighted relaxation)
+    // --------------------------------------------------------
+
+    buildMapImageData();
+
+
+    // --------------------------------------------------------
     // Generate points
     // --------------------------------------------------------
 
@@ -154,6 +367,10 @@ function initialize() {
 
     status.textContent =
         "Click points around the map to create the city boundary.";
+
+    logStep(
+        `Map loaded (${WORLD_WIDTH}x${WORLD_HEIGHT}).`
+    );
 }
 
 
@@ -168,6 +385,8 @@ if (mapElement.complete) {
     } else {
         status.textContent =
             "Map image could not be read.";
+
+        logStep("Error: map image could not be read.");
 
         console.error(
             "Image element is complete but naturalWidth is 0."
@@ -188,6 +407,8 @@ if (mapElement.complete) {
 
             status.textContent =
                 "Map image failed to load.";
+
+            logStep("Error: map image failed to load.");
 
             console.error(
                 "altitude-map.png failed to load."
@@ -574,6 +795,10 @@ function generatePoints() {
     status.textContent =
         `Generated ${points.length} points. ` +
         `Click around the map to create the city boundary.`;
+
+    logStep(
+        `Generated ${points.length} points (R=${R}, K=${K}).`
+    );
 }
 
 
@@ -595,6 +820,71 @@ function draw() {
 // ============================================================
 // GET POINTS INSIDE CLOSED CITY BOUNDARY
 // ============================================================
+//
+// This samples points along the ACTUAL rendered boundary path
+// (the same `d` string produced by getBoundaryPath(), which
+// uses d3's centripetal Catmull-Rom, curveCatmullRomClosed
+// .alpha(0.5)) via a detached <path> element's getPointAtLength.
+//
+// Previously this used a hand-written Catmull-Rom sampler
+// (createSplinePoints) with UNIFORM parameterization (alpha 0),
+// which is a different curve from the one actually drawn on
+// screen. Uniform Catmull-Rom tends to overshoot/bulge outward
+// more than centripetal Catmull-Rom around unevenly spaced
+// vertices, so the invisible test polygon was consistently
+// larger than the visible boundary curve - letting points that
+// were outside the drawn curve still test as "inside". Sampling
+// the real rendered path guarantees the containment test always
+// matches what's drawn, exactly.
+// ============================================================
+
+function getBoundaryPolygonPoints(samples = 200) {
+
+    if (boundaryPoints.length < 3) {
+        return [];
+    }
+
+    const pathData =
+        getBoundaryPath();
+
+    if (!pathData) {
+        return [];
+    }
+
+    const tempPath =
+        document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "path"
+        );
+
+    tempPath.setAttribute("d", pathData);
+
+    const totalLength =
+        tempPath.getTotalLength();
+
+    const result = [];
+
+    for (
+        let i = 0;
+        i < samples;
+        i++
+    ) {
+
+        const distance =
+            (i / samples) *
+            totalLength;
+
+        const point =
+            tempPath.getPointAtLength(distance);
+
+        result.push({
+            x: point.x,
+            y: point.y
+        });
+    }
+
+    return result;
+}
 
 function getInsideCityPoints() {
 
@@ -602,14 +892,15 @@ function getInsideCityPoints() {
         return points;
     }
 
-    const splinePoints =
-        createSplinePoints(
-            boundaryPoints,
-            25
-        );
+    const polygonPoints =
+        getBoundaryPolygonPoints(200);
+
+    if (!polygonPoints.length) {
+        return points;
+    }
 
     const polygon =
-        splinePoints.map(q => [q.x, q.y]);
+        polygonPoints.map(q => [q.x, q.y]);
 
     return points.filter(p =>
         d3.polygonContains(
@@ -617,6 +908,57 @@ function getInsideCityPoints() {
             [p.x, p.y]
         )
     );
+}
+
+
+// ============================================================
+// GET VORONOI EXTENT
+// ============================================================
+//
+// Using the full WORLD_WIDTH x WORLD_HEIGHT as the clip extent
+// gives edge cells (once the diagram is limited to points
+// inside a small city boundary) huge polygons that stretch out
+// to the map's corners/edges. Averaging those far-away vertices
+// pulls the "fake centroid" outward, which is why points were
+// drifting away from the center instead of toward it. Clipping
+// the extent to the boundary's own bounding box (plus a little
+// padding) keeps cells - and therefore centroids - close to the
+// actual city.
+// ============================================================
+
+function getVoronoiExtent() {
+
+    if (cityClosed && boundaryPoints.length >= 3) {
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+
+        for (const p of boundaryPoints) {
+
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+        }
+
+        const padding = 20;
+
+        return [
+            Math.max(0, minX - padding),
+            Math.max(0, minY - padding),
+            Math.min(WORLD_WIDTH, maxX + padding),
+            Math.min(WORLD_HEIGHT, maxY + padding)
+        ];
+    }
+
+    return [
+        0,
+        0,
+        WORLD_WIDTH,
+        WORLD_HEIGHT
+    ];
 }
 
 
@@ -652,111 +994,6 @@ function drawPoints() {
         .attr("cx", d => d.x)
         .attr("cy", d => d.y)
         .attr("r", radius);
-}
-
-
-// ============================================================
-// CATMULL-ROM SPLINE
-// ============================================================
-
-function createSplinePoints(
-    pts,
-    samplesPerSegment = 20
-) {
-
-    if (pts.length < 3) {
-        return pts.slice();
-    }
-
-
-    const result = [];
-
-
-    for (
-        let i = 0;
-        i < pts.length;
-        i++
-    ) {
-
-        const p0 =
-            pts[
-                (i - 1 + pts.length) %
-                pts.length
-            ];
-
-        const p1 =
-            pts[i];
-
-        const p2 =
-            pts[
-                (i + 1) %
-                pts.length
-            ];
-
-        const p3 =
-            pts[
-                (i + 2) %
-                pts.length
-            ];
-
-
-        for (
-            let j = 0;
-            j < samplesPerSegment;
-            j++
-        ) {
-
-            const t =
-                j / samplesPerSegment;
-
-            const t2 = t * t;
-            const t3 = t2 * t;
-
-
-            const x =
-                0.5 *
-                (
-                    (2 * p1.x) +
-
-                    (-p0.x + p2.x) * t +
-
-                    (2 * p0.x -
-                        5 * p1.x +
-                        4 * p2.x -
-                        p3.x) * t2 +
-
-                    (-p0.x +
-                        3 * p1.x -
-                        3 * p2.x +
-                        p3.x) * t3
-                );
-
-
-            const y =
-                0.5 *
-                (
-                    (2 * p1.y) +
-
-                    (-p0.y + p2.y) * t +
-
-                    (2 * p0.y -
-                        5 * p1.y +
-                        4 * p2.y -
-                        p3.y) * t2 +
-
-                    (-p0.y +
-                        3 * p1.y -
-                        3 * p2.y +
-                        p3.y) * t3
-                );
-
-
-            result.push({ x, y });
-        }
-    }
-
-
-    return result;
 }
 
 
@@ -992,12 +1229,7 @@ function drawVoronoi() {
 
     const voronoi =
         delaunay.voronoi(
-            [
-                0,
-                0,
-                WORLD_WIDTH,
-                WORLD_HEIGHT
-            ]
+            getVoronoiExtent()
         );
 
 
@@ -1052,7 +1284,13 @@ function drawVoronoi() {
 
 
 // ============================================================
-// FAKE CENTROID (average of Voronoi cell vertices)
+// FAKE CENTROID (plain average of Voronoi cell vertices)
+// ============================================================
+//
+// Color-seeking is handled separately (see findBluestDirection
+// below) and blended in per-point in relaxPoints(), so this
+// stays a plain geometric centroid - the thing that keeps
+// points evenly spaced.
 // ============================================================
 
 function getFakeCentroid(polygon) {
@@ -1103,20 +1341,36 @@ function relaxPoints() {
         );
 
     const voronoi =
-        delaunay.voronoi([
-            0,
-            0,
-            WORLD_WIDTH,
-            WORLD_HEIGHT
-        ]);
+        delaunay.voronoi(
+            getVoronoiExtent()
+        );
 
     // --------------------------------------------------------
-    // Find fake centroid of every Voronoi polygon, then LERP
-    // each point toward its own cell's fake centroid.
+    // For each point: the fake centroid of its Voronoi cell
+    // still applies as the baseline pull (keeps points evenly
+    // spaced). On top of that, compare the point's own current
+    // color to each of its cell's vertex colors:
+    //   - vertex bluer than the point  -> diff positive -> pull
+    //     the point toward that vertex
+    //   - vertex more yellow than the point -> diff negative ->
+    //     push the point away from that vertex
+    //   - equal color -> diff is 0 -> that vertex contributes
+    //     no color-driven movement at all
+    // The size of the step from each vertex scales with how big
+    // the color difference is, so a stark blue/yellow contrast
+    // moves the point a lot in one iteration, while a subtle
+    // difference barely moves it.
     // insidePoints holds references to the same objects that
     // live in `points`, so mutating them here updates `points`
     // too.
     // --------------------------------------------------------
+
+    // Pixels moved per unit of color difference (diff maxes out
+    // around +-1, since blueness is 0..1). Tied to point spacing
+    // (R) so bigger/sparser point sets get proportionally bigger
+    // steps.
+    const COLOR_STEP_SCALE =
+        Math.max(3, R);
 
     for (let i = 0; i < insidePoints.length; i++) {
 
@@ -1137,15 +1391,76 @@ function relaxPoints() {
         const point =
             insidePoints[i];
 
+        // Blueness (0..1, higher = bluer) of the point's
+        // current position, used as the comparison baseline
+        // for every vertex in its cell.
+        const centerBlueness =
+            1 - getViridisTAt(point.x, point.y);
+
+        let colorStepX = 0;
+        let colorStepY = 0;
+
+        for (const vertex of polygon) {
+
+            const vertexBlueness =
+                1 - getViridisTAt(vertex[0], vertex[1]);
+
+            // Positive: vertex is bluer than the point (pull
+            // toward it). Negative: vertex is more yellow
+            // (push away from it). Zero: no color influence.
+            const diff =
+                vertexBlueness - centerBlueness;
+
+            if (diff === 0) {
+                continue;
+            }
+
+            const dx = vertex[0] - point.x;
+            const dy = vertex[1] - point.y;
+
+            const dist =
+                Math.hypot(dx, dy);
+
+            if (dist < 1e-6) {
+                continue;
+            }
+
+            const unitX = dx / dist;
+            const unitY = dy / dist;
+
+            colorStepX +=
+                diff * COLOR_STEP_SCALE * unitX;
+
+            colorStepY +=
+                diff * COLOR_STEP_SCALE * unitY;
+        }
+
+        colorStepX /= polygon.length;
+        colorStepY /= polygon.length;
+
         point.x =
             point.x +
             (centroid.x - point.x) *
-            LERP_AMOUNT;
+            LERP_AMOUNT +
+            colorStepX;
 
         point.y =
             point.y +
             (centroid.y - point.y) *
-            LERP_AMOUNT;
+            LERP_AMOUNT +
+            colorStepY;
+
+        point.x =
+            Math.max(
+                0,
+                Math.min(WORLD_WIDTH, point.x)
+            );
+
+        point.y =
+            Math.max(
+                0,
+                Math.min(WORLD_HEIGHT, point.y)
+            );
     }
 
     drawPoints();
@@ -1169,6 +1484,10 @@ function startRelaxation(iterations = 150) {
 
     relaxing = true;
 
+    relaxBtn.disabled = true;
+
+    logStep(`Relaxation started (${iterations} iterations).`);
+
     let iteration = 0;
 
     function animate() {
@@ -1177,8 +1496,14 @@ function startRelaxation(iterations = 150) {
 
             relaxing = false;
 
+            relaxBtn.disabled = false;
+
             status.textContent =
                 "Point relaxation complete.";
+
+            logStep(
+                `Relaxation complete after ${iteration} iterations.`
+            );
 
             return;
         }
@@ -1287,13 +1612,18 @@ viewport.addEventListener(
 		drawPoints();
 
                 status.textContent =
-                    "City boundary closed. Relaxing points toward Voronoi fake centroids...";
+                    "City boundary closed. Press \"Relax Points\" to relax.";
 
 
                 drawVoronoi();
 
 
-                startRelaxation(150);
+                relaxBtn.disabled = false;
+
+
+                logStep(
+                    `City boundary closed (${boundaryPoints.length} vertices).`
+                );
 
 
                 return;
@@ -1317,6 +1647,10 @@ viewport.addEventListener(
         status.textContent =
             `Boundary points: ${boundaryPoints.length}. ` +
             `Click near the first point to close.`;
+
+        logStep(
+            `Boundary point ${boundaryPoints.length} added.`
+        );
     }
 );
 
@@ -1422,6 +1756,8 @@ resetBtn.addEventListener(
 
         stopRelaxation();
 
+        relaxBtn.disabled = true;
+
 
         boundaryPoints = [];
 
@@ -1454,11 +1790,14 @@ resetBtn.addEventListener(
         centerWorld();
 
 
-        draw();
+        logStep("Reset — boundary cleared, regenerating points.");
 
 
-        status.textContent =
-            "Reset. Click points around the map to create the city boundary.";
+        // Regenerate a fresh set of Poisson points rather than
+        // reusing the (possibly relaxed/moved) `points` array,
+        // so Reset actually restores the original point map.
+
+        generatePoints();
     }
 );
 
@@ -1517,6 +1856,44 @@ voronoiToggle.addEventListener(
     () => {
 
         drawVoronoi();
+
+        logStep(
+            voronoiToggle.checked
+                ? "Voronoi diagram shown."
+                : "Voronoi diagram hidden."
+        );
+    }
+);
+
+
+// ============================================================
+// RELAXATION CONTROLS
+// ============================================================
+
+relaxIterationsSlider.addEventListener(
+    "input",
+    () => {
+
+        relaxIterationsValue.textContent =
+            relaxIterationsSlider.value;
+    }
+);
+
+relaxBtn.addEventListener(
+    "click",
+    () => {
+
+        if (!cityClosed) {
+            return;
+        }
+
+        const iterations =
+            Math.max(
+                1,
+                Number(relaxIterationsSlider.value) || 1
+            );
+
+        startRelaxation(iterations);
     }
 );
 

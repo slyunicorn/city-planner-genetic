@@ -85,6 +85,25 @@
         Reset
     </button>
 
+    <div class="control-section">
+        <label>
+            <span>Relax Iterations</span>
+            <span id="relaxIterationsValue">50</span>
+        </label>
+
+        <input
+            id="relaxIterationsSlider"
+            type="range"
+            min="1"
+            max="300"
+            value="50"
+        >
+    </div>
+
+    <button id="relaxBtn" disabled>
+        Relax Points
+    </button>
+
     <label class="checkbox-row">
         <input id="voronoiToggle" type="checkbox">
         Show Voronoi Diagram
@@ -96,6 +115,16 @@
 
 </div>
 
+
+<div id="logPanel">
+
+    <div id="logPanel-header">
+        Log
+    </div>
+
+    <div id="logList"></div>
+
+</div>
 
 <script src="app.js"></script>
 
