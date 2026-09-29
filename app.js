@@ -34,6 +34,13 @@ const relaxIterationsSlider = document.getElementById("relaxIterationsSlider");
 const relaxIterationsValue = document.getElementById("relaxIterationsValue");
 const relaxBtn = document.getElementById("relaxBtn");
 
+const latInput = document.getElementById("latInput");
+const lonInput = document.getElementById("lonInput");
+const distInput = document.getElementById("distInput");
+const sizeSelect = document.getElementById("sizeSelect");
+const loadTerrainBtn = document.getElementById("loadTerrainBtn");
+const scaleNote = document.getElementById("scaleNote");
+
 const facilityRSlider = document.getElementById("facilityRSlider");
 const facilityRValue = document.getElementById("facilityRValue");
 const placeFacilitiesBtn = document.getElementById("placeFacilitiesBtn");
@@ -42,6 +49,8 @@ const epochsSlider = document.getElementById("epochsSlider");
 const epochsValue = document.getElementById("epochsValue");
 const optimizeBtn = document.getElementById("optimizeBtn");
 
+const seaLevelInput = document.getElementById("seaLevelInput");
+const sobelToggle = document.getElementById("sobelToggle");
 const voronoiToggle = document.getElementById("voronoiToggle");
 const facilityToggle = document.getElementById("facilityToggle");
 
@@ -159,199 +168,715 @@ let facilityStepScale = 1;
 
 
 // ============================================================
-// MAP PIXEL SAMPLING (for viridis-weighted relaxation)
+// TERRAIN TILES (AWS Terrarium)
 // ============================================================
 //
-// The altitude map is assumed to be colored with a viridis
-// colormap (dark blue/purple = low values, yellow = high
-// values). To weight relaxation toward blue and away from
-// yellow, we read the map's pixels into an offscreen canvas
-// once, then for any world (x, y) can look up its color and
-// match it against a precomputed viridis lookup table to
-// estimate where along the 0-1 viridis gradient that pixel
-// sits.
+// The height map is fetched live from AWS's public Terrarium
+// terrain tiles rather than shipped as a picture. Each tile is
+// a 256x256 PNG whose RGB encodes elevation directly:
+//
+//     elevation_m = (R * 256 + G + B / 256) - 32768
+//
+// We fetch the tiles covering the requested area, stitch them
+// into one offscreen canvas, decode every pixel to metres once,
+// and keep a normalised Float32Array. Everything downstream
+// samples that array, so there is no colour-matching step at
+// all - elevation is read exactly instead of being guessed back
+// out of viridis pixels.
 // ============================================================
 
-let mapImageData = null;
+const TILE_URL =
+    "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 
-const VIRIDIS_STEPS = 256;
-let viridisTable = null;
+const TILE_PX = 256;
+const R_EARTH = 6378137;
+const MERC_ORIGIN = Math.PI * R_EARTH;   // 20037508.342789244
+const MAX_ZOOM = 15;
 
-function buildMapImageData() {
 
-    try {
+// Normalised elevation, 0 = lowest point in view, 1 = highest.
+// Same orientation as the old viridis t: 0 is blue, 1 is yellow.
+let elevationData = null;
 
-        const canvas =
-            document.createElement("canvas");
+// Raw metres, kept so the Sobel pass can work in real units.
+let elevationMetres = null;
 
-        canvas.width = WORLD_WIDTH;
-        canvas.height = WORLD_HEIGHT;
+// Normalised Sobel gradient magnitude, 0 = perfectly flat,
+// 1 = steepest slope in view.
+let slopeData = null;
 
-        const ctx =
-            canvas.getContext("2d");
+// Steepest slope in view, as a real rise/run ratio, for display.
+let slopeMaxRatio = 0;
 
-        ctx.drawImage(
-            mapElement,
-            0,
-            0,
-            WORLD_WIDTH,
-            WORLD_HEIGHT
-        );
+// Anything strictly below this height counts as water and is
+// removed from the city when the boundary closes.
+let seaLevelM = 0;
 
-        mapImageData =
-            ctx.getImageData(
-                0,
-                0,
-                WORLD_WIDTH,
-                WORLD_HEIGHT
-            );
+let elevationWidth = 0;
+let elevationHeight = 0;
 
-    } catch (err) {
+// Real-world scale, so pixel distances can be reported in metres.
+let metresPerPixel = 0;
 
-        console.error(
-            "Could not read map pixel data " +
-            "(likely blocked by CORS):",
-            err
-        );
+let elevationMinM = 0;
+let elevationMaxM = 0;
 
+
+// ------------------------------------------------------------
+// Web Mercator helpers
+// ------------------------------------------------------------
+
+function lonToMerc(lon) {
+    return (lon * Math.PI / 180) * R_EARTH;
+}
+
+function latToMerc(lat) {
+    return Math.log(
+        Math.tan(Math.PI / 4 + (lat * Math.PI / 180) / 2)
+    ) * R_EARTH;
+}
+
+function mercToPixel(x, y, z) {
+    const scale =
+        TILE_PX * Math.pow(2, z) / (2 * MERC_ORIGIN);
+
+    return {
+        x: (x + MERC_ORIGIN) * scale,
+        y: (MERC_ORIGIN - y) * scale
+    };
+}
+
+// Metres of ground per tile pixel at this latitude and zoom.
+function groundResolution(lat, z) {
+    return (2 * MERC_ORIGIN) /
+        (TILE_PX * Math.pow(2, z)) *
+        Math.cos(lat * Math.PI / 180);
+}
+
+// Finest zoom whose native resolution still covers the area
+// without needing more tiles than is reasonable.
+function pickZoom(lat, distM, targetPx) {
+    const want = (2 * distM) / targetPx;
+
+    const z = Math.log2(
+        (2 * MERC_ORIGIN) *
+        Math.cos(lat * Math.PI / 180) /
+        (TILE_PX * want)
+    );
+
+    return Math.max(0, Math.min(MAX_ZOOM, Math.ceil(z)));
+}
+
+
+// ------------------------------------------------------------
+// Fetch one tile
+// ------------------------------------------------------------
+
+function loadTile(z, x, y) {
+
+    return new Promise(resolve => {
+
+        const n = Math.pow(2, z);
+
+        // Off the top or bottom of the world - nothing to fetch.
+        if (y < 0 || y >= n) {
+            resolve(null);
+            return;
+        }
+
+        const wrappedX = ((x % n) + n) % n;
+
+        const img = new Image();
+
+        // Required so the stitched canvas stays readable by
+        // getImageData(). Without it the canvas is tainted and
+        // every pixel read throws a SecurityError.
+        img.crossOrigin = "anonymous";
+
+        img.onload = () => resolve(img);
+
+        img.onerror = () => resolve(null);
+
+        img.src = TILE_URL
+            .replace("{z}", z)
+            .replace("{x}", wrappedX)
+            .replace("{y}", y);
+    });
+}
+
+
+// ------------------------------------------------------------
+// Fetch, stitch and decode an area
+// ------------------------------------------------------------
+
+async function loadTerrain(lat, lon, distM, targetPx) {
+
+    const z = pickZoom(lat, distM, targetPx);
+
+    const native = groundResolution(lat, z);
+    const want = (2 * distM) / targetPx;
+
+    if (native > want * 1.01) {
         logStep(
-            "Warning: couldn't read map pixels for viridis " +
-            "weighting (relaxation will be unweighted)."
+            `Note: ${want.toFixed(1)} m/px requested but zoom ${z} is the ` +
+            `finest available (${native.toFixed(1)} m/px) - upsampling.`
         );
-
-        mapImageData = null;
-    }
-}
-
-function buildViridisTable() {
-
-    viridisTable = [];
-
-    for (
-        let i = 0;
-        i < VIRIDIS_STEPS;
-        i++
-    ) {
-
-        const t =
-            i / (VIRIDIS_STEPS - 1);
-
-        const color =
-            d3.rgb(
-                d3.interpolateViridis(t)
-            );
-
-        viridisTable.push({
-            t,
-            r: color.r,
-            g: color.g,
-            b: color.b
-        });
-    }
-}
-
-// Given an RGB color, find the closest match in the viridis
-// gradient and return its position (0 = blue/purple end,
-// 1 = yellow end).
-function nearestViridisT(r, g, b) {
-
-    if (!viridisTable) {
-        buildViridisTable();
     }
 
-    let bestT = 0.5;
-    let bestDist = Infinity;
+    // Square in GROUND metres. Mercator stretches by 1/cos(lat),
+    // so divide through or the area comes out rectangular.
+    const cx = lonToMerc(lon);
+    const cy = latToMerc(lat);
 
-    for (const entry of viridisTable) {
+    const half =
+        distM / Math.cos(lat * Math.PI / 180);
 
-        const dr = entry.r - r;
-        const dg = entry.g - g;
-        const db = entry.b - b;
+    const topLeft =
+        mercToPixel(cx - half, cy + half, z);
 
-        const dist =
-            dr * dr +
-            dg * dg +
-            db * db;
+    const bottomRight =
+        mercToPixel(cx + half, cy - half, z);
 
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestT = entry.t;
+    const x0 = Math.floor(topLeft.x / TILE_PX);
+    const x1 = Math.floor(bottomRight.x / TILE_PX);
+    const y0 = Math.floor(topLeft.y / TILE_PX);
+    const y1 = Math.floor(bottomRight.y / TILE_PX);
+
+    const cols = x1 - x0 + 1;
+    const rows = y1 - y0 + 1;
+    const total = cols * rows;
+
+    if (total > 256) {
+        throw new Error(
+            `${total} tiles needed - reduce the radius or resolution.`
+        );
+    }
+
+    status.textContent =
+        `Fetching ${total} terrain tiles (zoom ${z})...`;
+
+    logStep(
+        `Loading terrain: ${lat.toFixed(4)}, ${lon.toFixed(4)} ` +
+        `±${distM} m, zoom ${z}, ${total} tiles.`
+    );
+
+
+    // --------------------------------------------------------
+    // Stitch every tile into one offscreen canvas
+    // --------------------------------------------------------
+
+    const mosaic = document.createElement("canvas");
+
+    mosaic.width = cols * TILE_PX;
+    mosaic.height = rows * TILE_PX;
+
+    const mctx =
+        mosaic.getContext("2d", { willReadFrequently: true });
+
+    // RGB(128,0,0) decodes to exactly 0 m, a sane fill for any
+    // tile that fails to load.
+    mctx.fillStyle = "rgb(128,0,0)";
+    mctx.fillRect(0, 0, mosaic.width, mosaic.height);
+
+    const jobs = [];
+
+    for (let ty = y0; ty <= y1; ty++) {
+        for (let tx = x0; tx <= x1; tx++) {
+            jobs.push({ tx, ty });
         }
     }
 
-    return bestT;
+    let loaded = 0;
+    let failed = 0;
+
+    await Promise.all(
+        jobs.map(async job => {
+
+            const img =
+                await loadTile(z, job.tx, job.ty);
+
+            loaded++;
+
+            if (!img) {
+                failed++;
+            } else {
+                mctx.drawImage(
+                    img,
+                    (job.tx - x0) * TILE_PX,
+                    (job.ty - y0) * TILE_PX
+                );
+            }
+
+            status.textContent =
+                `Fetching terrain tiles... ${loaded}/${total}`;
+        })
+    );
+
+    if (failed === total) {
+        throw new Error(
+            "No terrain tiles could be loaded - check the network."
+        );
+    }
+
+    if (failed > 0) {
+        logStep(`${failed} of ${total} tiles failed; filled with 0 m.`);
+    }
+
+
+    // --------------------------------------------------------
+    // Crop the mosaic to the requested box
+    // --------------------------------------------------------
+
+    const cropX = topLeft.x - x0 * TILE_PX;
+    const cropY = topLeft.y - y0 * TILE_PX;
+
+    const cropW = bottomRight.x - topLeft.x;
+    const cropH = bottomRight.y - topLeft.y;
+
+    const out = document.createElement("canvas");
+
+    out.width = targetPx;
+    out.height = targetPx;
+
+    const octx =
+        out.getContext("2d", { willReadFrequently: true });
+
+    // Nearest-neighbour: averaging neighbouring pixels would mix
+    // the R/G/B channels of the terrarium encoding together and
+    // produce elevations that were never actually measured.
+    octx.imageSmoothingEnabled = false;
+
+    octx.drawImage(
+        mosaic,
+        cropX, cropY, cropW, cropH,
+        0, 0, targetPx, targetPx
+    );
+
+    let pixels;
+
+    try {
+        pixels =
+            octx.getImageData(0, 0, targetPx, targetPx).data;
+
+    } catch (err) {
+        throw new Error(
+            "Tile pixels could not be read (CORS). The tile server " +
+            "did not send Access-Control-Allow-Origin."
+        );
+    }
+
+
+    // --------------------------------------------------------
+    // Decode terrarium RGB to metres
+    // --------------------------------------------------------
+
+    const metres =
+        new Float32Array(targetPx * targetPx);
+
+    let lo = Infinity;
+    let hi = -Infinity;
+
+    for (let i = 0; i < metres.length; i++) {
+
+        const p = i * 4;
+
+        const e =
+            pixels[p] * 256 +
+            pixels[p + 1] +
+            pixels[p + 2] / 256 -
+            32768;
+
+        metres[i] = e;
+
+        if (e < lo) { lo = e; }
+        if (e > hi) { hi = e; }
+    }
+
+
+    // --------------------------------------------------------
+    // Normalise to 0..1 for sampling
+    // --------------------------------------------------------
+
+    const span = hi > lo ? hi - lo : 1;
+
+    const norm =
+        new Float32Array(metres.length);
+
+    for (let i = 0; i < metres.length; i++) {
+        norm[i] = (metres[i] - lo) / span;
+    }
+
+    elevationData = norm;
+    elevationMetres = metres;
+    elevationWidth = targetPx;
+    elevationHeight = targetPx;
+
+    elevationMinM = lo;
+    elevationMaxM = hi;
+
+    metresPerPixel = (2 * distM) / targetPx;
+
+    computeSobel();
+
+    logStep(
+        `Terrain ready: ${lo.toFixed(0)}-${hi.toFixed(0)} m over ` +
+        `${targetPx}x${targetPx} px (${metresPerPixel.toFixed(1)} m/px), ` +
+        `max slope ${(slopeMaxRatio * 100).toFixed(0)}%.`
+    );
+
+    return { width: targetPx, height: targetPx };
 }
 
-// Returns the viridis position (0 = blue, 1 = yellow) of the
-// map pixel under the given world coordinate. Falls back to a
-// neutral 0.5 if pixel data isn't available.
-function getViridisTAt(x, y) {
 
-    if (!mapImageData) {
-        return 0.5;
+// ============================================================
+// SOBEL — terrain steepness
+// ============================================================
+//
+// A 3x3 Sobel pass over the elevation grid gives the gradient
+// of the ground, i.e. its slope. Run on metres (not on the
+// normalised values) and divided by the pixel spacing, the
+// magnitude is a real rise/run ratio:
+//
+//     Gx = [ -1  0  1 ]        Gy = [ -1 -2 -1 ]
+//          [ -2  0  2 ] * H         [  0  0  0 ] * H
+//          [ -1  0  1 ]             [  1  2  1 ]
+//
+//     slope = sqrt(Gx^2 + Gy^2) / (8 * metresPerPixel)
+//
+// The 8 is the Sobel kernel's weight sum, which turns the
+// filter response back into a per-metre derivative.
+//
+// Low slope = flat, buildable ground. The relaxation uses this
+// to pull block centroids onto flatter land.
+// ============================================================
+
+function computeSobel() {
+
+    if (!elevationMetres) {
+        slopeData = null;
+        return;
+    }
+
+    const w = elevationWidth;
+    const h = elevationHeight;
+
+    const raw = new Float32Array(w * h);
+
+    const spacing =
+        8 * (metresPerPixel || 1);
+
+    // Clamp to the edge so border pixels get a real value
+    // instead of a false cliff against zero.
+    const at = (x, y) =>
+        elevationMetres[
+            Math.min(h - 1, Math.max(0, y)) * w +
+            Math.min(w - 1, Math.max(0, x))
+        ];
+
+    for (let y = 0; y < h; y++) {
+
+        for (let x = 0; x < w; x++) {
+
+            const tl = at(x - 1, y - 1);
+            const tc = at(x,     y - 1);
+            const tr = at(x + 1, y - 1);
+
+            const ml = at(x - 1, y);
+            const mr = at(x + 1, y);
+
+            const bl = at(x - 1, y + 1);
+            const bc = at(x,     y + 1);
+            const br = at(x + 1, y + 1);
+
+            const gx =
+                (tr + 2 * mr + br) -
+                (tl + 2 * ml + bl);
+
+            const gy =
+                (bl + 2 * bc + br) -
+                (tl + 2 * tc + tr);
+
+            raw[y * w + x] =
+                Math.hypot(gx, gy) / spacing;
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // Normalise against a high percentile, not the maximum: a
+    // single cliff or a tile seam would otherwise compress all
+    // the real terrain into the bottom of the range.
+    // --------------------------------------------------------
+
+    const sorted =
+        Float32Array.from(raw).sort();
+
+    const p99 =
+        sorted[
+            Math.min(
+                sorted.length - 1,
+                Math.floor(sorted.length * 0.99)
+            )
+        ] || 1;
+
+    slopeMaxRatio = p99;
+
+    const norm = new Float32Array(raw.length);
+
+    for (let i = 0; i < raw.length; i++) {
+        norm[i] = Math.min(1, raw[i] / p99);
+    }
+
+    slopeData = norm;
+}
+
+
+// Normalised steepness at a world coordinate.
+// 0 = flat, 1 = as steep as anything in view.
+function getSlopeAt(x, y) {
+
+    if (!slopeData) {
+        return 0;
     }
 
     const px =
         Math.min(
-            WORLD_WIDTH - 1,
+            elevationWidth - 1,
             Math.max(0, Math.round(x))
         );
 
     const py =
         Math.min(
-            WORLD_HEIGHT - 1,
+            elevationHeight - 1,
             Math.max(0, Math.round(y))
         );
 
-    const index =
-        (py * WORLD_WIDTH + px) * 4;
+    return slopeData[py * elevationWidth + px];
+}
 
-    const data =
-        mapImageData.data;
 
-    return nearestViridisT(
-        data[index],
-        data[index + 1],
-        data[index + 2]
+// ------------------------------------------------------------
+// Viridis colour ramp (display only)
+// ------------------------------------------------------------
+//
+// Elevation is sampled from elevationData directly, so this ramp
+// is only used to paint the visible map.
+
+const VIRIDIS_STOPS = [
+    [ 68,   1,  84], [ 72,  40, 120], [ 62,  74, 137],
+    [ 49, 104, 142], [ 38, 130, 142], [ 31, 158, 137],
+    [ 53, 183, 121], [ 109, 205, 89], [ 180, 222, 44],
+    [ 253, 231,  37]
+];
+
+function viridisColor(t) {
+
+    const clamped =
+        Math.max(0, Math.min(1, t));
+
+    const scaled =
+        clamped * (VIRIDIS_STOPS.length - 1);
+
+    const i =
+        Math.min(
+            VIRIDIS_STOPS.length - 2,
+            Math.floor(scaled)
+        );
+
+    const f = scaled - i;
+
+    const a = VIRIDIS_STOPS[i];
+    const b = VIRIDIS_STOPS[i + 1];
+
+    return [
+        a[0] + (b[0] - a[0]) * f,
+        a[1] + (b[1] - a[1]) * f,
+        a[2] + (b[2] - a[2]) * f
+    ];
+}
+
+
+// ------------------------------------------------------------
+// Paint the height map onto the visible canvas
+// ------------------------------------------------------------
+
+function renderTerrain() {
+
+    if (!elevationData) {
+        return;
+    }
+
+    mapElement.width = elevationWidth;
+    mapElement.height = elevationHeight;
+
+    const ctx =
+        mapElement.getContext("2d");
+
+    const img =
+        ctx.createImageData(elevationWidth, elevationHeight);
+
+    const showSlope =
+        sobelToggle.checked && slopeData;
+
+    for (let i = 0; i < elevationData.length; i++) {
+
+        const p = i * 4;
+
+        if (showSlope) {
+
+            // Steepness as greyscale: black = flat (where the
+            // relaxation wants to put blocks), white = steep.
+            const v =
+                Math.round(slopeData[i] * 255);
+
+            img.data[p] = v;
+            img.data[p + 1] = v;
+            img.data[p + 2] = v;
+
+        } else if (
+            elevationData &&
+            elevationMinM +
+                elevationData[i] *
+                (elevationMaxM - elevationMinM) < seaLevelM
+        ) {
+
+            // Below sea level: shade as water so it is obvious
+            // which ground the city cannot use. Viridis is blue
+            // at its low end too, so without this the drowned
+            // area is indistinguishable from merely low land.
+            img.data[p] = 12;
+            img.data[p + 1] = 38;
+            img.data[p + 2] = 74;
+
+        } else {
+
+            const c =
+                viridisColor(elevationData[i]);
+
+            img.data[p] = c[0];
+            img.data[p + 1] = c[1];
+            img.data[p + 2] = c[2];
+        }
+
+        img.data[p + 3] = 255;
+    }
+
+    ctx.putImageData(img, 0, 0);
+}
+
+
+// ============================================================
+// ELEVATION SAMPLING
+// ============================================================
+//
+// The lowest and highest elevations found in the fetched tiles
+// (elevationMinM / elevationMaxM) are what the colour ramp's
+// blue and yellow ends are pinned to, so the visible gradient
+// always spans the full relief of whatever area was loaded.
+//
+// Height at an arbitrary point is read from the decoded metre
+// values directly, NOT by inspecting the rendered pixel colour.
+// Same anchors, same gradient - but going back through the
+// colour would quantise every height to one of 256 ramp steps
+// and then guess which step it was. Reading the array is exact
+// and cheaper.
+//
+// Sampling is bilinear, so a point between grid cells gets an
+// interpolated height rather than snapping to whichever pixel
+// centre happens to be nearest.
+// ============================================================
+
+// Normalised height, 0 = lowest ground in view, 1 = highest.
+function getViridisTAt(x, y) {
+
+    if (!elevationData) {
+        return 0.5;
+    }
+
+    const fx =
+        Math.min(elevationWidth - 1, Math.max(0, x));
+
+    const fy =
+        Math.min(elevationHeight - 1, Math.max(0, y));
+
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+
+    const x1 = Math.min(elevationWidth - 1, x0 + 1);
+    const y1 = Math.min(elevationHeight - 1, y0 + 1);
+
+    const tx = fx - x0;
+    const ty = fy - y0;
+
+    const a = elevationData[y0 * elevationWidth + x0];
+    const b = elevationData[y0 * elevationWidth + x1];
+    const c = elevationData[y1 * elevationWidth + x0];
+    const d = elevationData[y1 * elevationWidth + x1];
+
+    return (
+        a * (1 - tx) * (1 - ty) +
+        b * tx * (1 - ty) +
+        c * (1 - tx) * ty +
+        d * tx * ty
     );
+}
+
+
+// ------------------------------------------------------------
+// Height of any point, in real metres above sea level
+// ------------------------------------------------------------
+//
+//   height(p) = minM + t(p) * (maxM - minM)
+//
+// where t is the normalised position along the blue->yellow
+// ramp and minM / maxM are the tile extremes from S3.
+
+function getElevationAt(x, y) {
+
+    if (!elevationData) {
+        return 0;
+    }
+
+    return elevationMinM +
+        getViridisTAt(x, y) *
+        (elevationMaxM - elevationMinM);
+}
+
+
+// Is this point above the configured sea level?
+function isLand(x, y) {
+
+    if (!elevationData) {
+        return true;
+    }
+
+    return getElevationAt(x, y) >= seaLevelM;
 }
 
 
 // ============================================================
 // INITIALIZE
 // ============================================================
+//
+// Called once terrain has been fetched and decoded. The world's
+// pixel dimensions now come from the decoded elevation grid
+// rather than an image's intrinsic size.
+// ============================================================
 
-function initialize() {
+function initialize(width, height) {
 
-    // IMPORTANT:
-    // This is an HTML <img>, so naturalWidth is reliable.
-
-    WORLD_WIDTH = mapElement.naturalWidth;
-    WORLD_HEIGHT = mapElement.naturalHeight;
+    WORLD_WIDTH = width;
+    WORLD_HEIGHT = height;
 
     if (!WORLD_WIDTH || !WORLD_HEIGHT) {
 
         status.textContent =
-            "Could not determine map dimensions.";
+            "Terrain has no dimensions.";
 
-        logStep("Error: could not determine map dimensions.");
-
-        console.error(
-            "Map dimensions are invalid:",
-            WORLD_WIDTH,
-            WORLD_HEIGHT
-        );
+        logStep("Error: terrain grid is empty.");
 
         return;
     }
-
-
-    console.log(
-        "Map loaded:",
-        WORLD_WIDTH,
-        "x",
-        WORLD_HEIGHT
-    );
 
 
     // --------------------------------------------------------
@@ -363,7 +888,7 @@ function initialize() {
 
 
     // --------------------------------------------------------
-    // Size map
+    // Size the map canvas
     // --------------------------------------------------------
 
     mapElement.style.width = `${WORLD_WIDTH}px`;
@@ -387,14 +912,9 @@ function initialize() {
     // Center map
     // --------------------------------------------------------
 
+    zoomScale = 1;
+
     centerWorld();
-
-
-    // --------------------------------------------------------
-    // Read map pixels (for viridis-weighted relaxation)
-    // --------------------------------------------------------
-
-    buildMapImageData();
 
 
     // --------------------------------------------------------
@@ -406,57 +926,117 @@ function initialize() {
 
     status.textContent =
         "Click points around the map to create the city boundary.";
-
-    logStep(
-        `Map loaded (${WORLD_WIDTH}x${WORLD_HEIGHT}).`
-    );
 }
 
 
 // ============================================================
-// IMAGE LOADING
+// LOAD TERRAIN FROM CONTROLS
 // ============================================================
 
-if (mapElement.complete) {
+async function loadTerrainFromControls() {
 
-    if (mapElement.naturalWidth > 0) {
-        initialize();
-    } else {
+    const lat = Number(latInput.value);
+    const lon = Number(lonInput.value);
+    const distM = Number(distInput.value);
+    const size = Number(sizeSelect.value);
+
+    seaLevelM = Number(seaLevelInput.value) || 0;
+
+    if (
+        !Number.isFinite(lat) || lat < -85 || lat > 85 ||
+        !Number.isFinite(lon) || lon < -180 || lon > 180
+    ) {
         status.textContent =
-            "Map image could not be read.";
-
-        logStep("Error: map image could not be read.");
-
-        console.error(
-            "Image element is complete but naturalWidth is 0."
-        );
+            "Enter a latitude of -85..85 and a longitude of -180..180.";
+        return;
     }
 
-} else {
+    if (!Number.isFinite(distM) || distM < 100) {
+        status.textContent =
+            "Radius must be at least 100 m.";
+        return;
+    }
 
-    mapElement.addEventListener(
-        "load",
-        initialize,
-        { once: true }
-    );
 
-    mapElement.addEventListener(
-        "error",
-        () => {
+    loadTerrainBtn.disabled = true;
 
-            status.textContent =
-                "Map image failed to load.";
+    // A new map invalidates everything built on the old one.
+    stopRelaxation();
+    stopOptimization();
 
-            logStep("Error: map image failed to load.");
+    boundaryPoints = [];
+    cityClosed = false;
+    facilityPoints = [];
+    currentMetric = null;
 
-            console.error(
-                "altitude-map.png failed to load."
-            );
+    cityClipPath.attr("d", "");
+    voronoiLayer.selectAll("*").remove();
+    boundaryLayer.selectAll("*").remove();
+    vertexLayer.selectAll("*").remove();
+    facilityVoronoiLayer.selectAll("*").remove();
+    facilityPointLayer.selectAll("*").remove();
 
-        },
-        { once: true }
-    );
+    relaxBtn.disabled = true;
+    placeFacilitiesBtn.disabled = true;
+    optimizeBtn.disabled = true;
+
+    updateMetricDisplay();
+
+
+    try {
+
+        const grid =
+            await loadTerrain(lat, lon, distM, size);
+
+        renderTerrain();
+
+        initialize(grid.width, grid.height);
+
+        let water = 0;
+
+        for (let i = 0; i < elevationData.length; i++) {
+
+            const m =
+                elevationMinM +
+                elevationData[i] *
+                (elevationMaxM - elevationMinM);
+
+            if (m < seaLevelM) {
+                water++;
+            }
+        }
+
+        const waterPct =
+            (100 * water / elevationData.length).toFixed(1);
+
+        scaleNote.textContent =
+            `${metresPerPixel.toFixed(1)} m/px · ` +
+            `${elevationMinM.toFixed(0)}–${elevationMaxM.toFixed(0)} m · ` +
+            `${waterPct}% below ${seaLevelM} m`;
+
+    } catch (err) {
+
+        status.textContent = err.message;
+
+        logStep(`Terrain load failed: ${err.message}`);
+
+        console.error(err);
+
+    } finally {
+
+        loadTerrainBtn.disabled = false;
+    }
 }
+
+
+loadTerrainBtn.addEventListener(
+    "click",
+    loadTerrainFromControls
+);
+
+
+// Load the default view on startup.
+loadTerrainFromControls();
 
 
 // ============================================================
@@ -943,11 +1523,16 @@ function getInsideCityPoints() {
     const polygon =
         polygonPoints.map(q => [q.x, q.y]);
 
+    // A point belongs to the city only if it is inside the
+    // boundary AND on land. The land test is applied every call
+    // rather than once at closing time, because relaxation keeps
+    // moving points and one can drift below sea level later.
     return points.filter(p =>
         d3.polygonContains(
             polygon,
             [p.x, p.y]
-        )
+        ) &&
+        isLand(p.x, p.y)
     );
 }
 
@@ -1325,32 +1910,53 @@ function drawVoronoi() {
 
 
 // ============================================================
-// FAKE CENTROID (geometric average, then shifted toward blue)
+// FAKE CENTROID (flatness-weighted, then shifted toward blue)
 // ============================================================
 //
-// Starts as the plain average of the cell's vertices, then
-// steers that centroid toward color:
+// Two terrain terms, applied in order:
 //
-//   1. Loop the vertices and build an average "blue direction"
-//      - each vertex's direction away from the centroid,
-//      weighted by how blue that vertex is. Vertices sitting on
-//      blue ground pull hard, yellow ones barely pull at all,
-//      so the summed direction points wherever the blue is.
-//   2. Compare the vertices' average blueness against the
-//      blueness at the centroid itself.
-//   3. Shift the centroid along the blue direction by an amount
-//      proportional to that difference. A centroid stranded in
-//      a very yellow spot with blue vertices around it gets a
-//      big shift and moves fast; a centroid already as blue as
-//      its surroundings gets no shift at all and the plain
-//      geometric centroid is returned unchanged.
+//   1. FLATNESS (Sobel). Instead of averaging the cell's
+//      vertices equally, each vertex is weighted by how flat
+//      the ground is under it. Vertices on flat land pull the
+//      centroid hard; vertices on a steep slope barely pull at
+//      all. The centroid therefore drifts onto buildable ground
+//      without needing a separate force.
 //
-// The shift is measured in units of the cell's own radius, so
-// it self-scales with point density instead of needing R.
+//   2. ELEVATION (blueness). The flat-weighted centroid is then
+//      shifted along the average blue direction, by an amount
+//      proportional to how much bluer the cell's ring is than
+//      the centroid's own spot, exactly as before.
+//
+// Formula, for a cell with vertices v1..vn:
+//
+//   S(p)  = normalised Sobel slope at p      (0 flat .. 1 steep)
+//   t(p)  = normalised elevation at p        (0 low  .. 1 high)
+//
+//   wi    = (1 - S(vi))^GAMMA + EPSILON      flatness weight
+//   C     = SUM(wi * vi) / SUM(wi)           flat-biased centroid
+//
+//   bi    = 1 - t(vi)                        blueness per vertex
+//   bmean = mean(bi)
+//   bC    = 1 - t(C)
+//   dhat  = normalise( SUM( bi * (vi - C)/|vi - C| ) )
+//   r     = mean |vi - C|                    cell radius
+//
+//   C'    = C + dhat * max(0, bmean - bC) * r * STRENGTH
+//
+// With GAMMA = 0 the weights collapse to 1 and C is the plain
+// mean, i.e. the original behaviour.
 // ============================================================
 
+// How sharply flat ground is preferred. 0 = ignore slope,
+// 1 = linear, higher = only the flattest vertices matter.
+const FLATNESS_GAMMA = 2.0;
+
+// Floor so an all-steep cell still has a defined centroid
+// rather than dividing by zero.
+const FLATNESS_EPSILON = 0.05;
+
 // How far (in cell radii) a full 1.0 blueness difference moves
-// the centroid. Higher = more aggressive colour seeking.
+// the centroid. Higher = more aggressive elevation seeking.
 const COLOR_SHIFT_STRENGTH = 1.5;
 
 function getFakeCentroid(polygon) {
@@ -1360,30 +1966,50 @@ function getFakeCentroid(polygon) {
     }
 
     // --------------------------------------------------------
-    // Plain geometric centroid
+    // 1. Flatness-weighted centroid
+    //    wi = (1 - S(vi))^GAMMA + EPSILON
+    //    C  = SUM(wi * vi) / SUM(wi)
     // --------------------------------------------------------
 
     let sumX = 0;
     let sumY = 0;
+    let sumW = 0;
+
+    const useSlope =
+        slopeData && FLATNESS_GAMMA > 0;
 
     for (const vertex of polygon) {
 
-        sumX += vertex[0];
-        sumY += vertex[1];
+        const weight =
+            useSlope
+                ? Math.pow(
+                      1 - getSlopeAt(vertex[0], vertex[1]),
+                      FLATNESS_GAMMA
+                  ) + FLATNESS_EPSILON
+                : 1;
+
+        sumX += vertex[0] * weight;
+        sumY += vertex[1] * weight;
+
+        sumW += weight;
+    }
+
+    if (sumW <= 0) {
+        return null;
     }
 
     const centroid = {
-        x: sumX / polygon.length,
-        y: sumY / polygon.length
+        x: sumX / sumW,
+        y: sumY / sumW
     };
 
-    // Without pixel data there's no colour to steer by.
-    if (!mapImageData) {
+    // Without terrain data there's no height to steer by.
+    if (!elevationData) {
         return centroid;
     }
 
     // --------------------------------------------------------
-    // Average blue direction + average blueness of vertices
+    // 2. Average blue direction + average blueness of vertices
     // --------------------------------------------------------
 
     let dirX = 0;
@@ -1394,7 +2020,7 @@ function getFakeCentroid(polygon) {
 
     for (const vertex of polygon) {
 
-        // 0 = fully yellow, 1 = fully blue.
+        // 0 = highest ground, 1 = lowest.
         const blueness =
             1 - getViridisTAt(vertex[0], vertex[1]);
 
@@ -1412,7 +2038,6 @@ function getFakeCentroid(polygon) {
             continue;
         }
 
-        // Direction toward this vertex, weighted by its blue.
         dirX += (dx / dist) * blueness;
         dirY += (dy / dist) * blueness;
     }
@@ -1426,14 +2051,9 @@ function getFakeCentroid(polygon) {
     const dirMagnitude =
         Math.hypot(dirX, dirY);
 
-    // Blue spread evenly all around -> no direction to prefer.
     if (dirMagnitude < 1e-6 || cellRadius < 1e-6) {
         return centroid;
     }
-
-    // --------------------------------------------------------
-    // How much bluer is the surrounding ring than right here?
-    // --------------------------------------------------------
 
     const centroidBlueness =
         1 - getViridisTAt(centroid.x, centroid.y);
@@ -1441,17 +2061,10 @@ function getFakeCentroid(polygon) {
     const difference =
         averageBlueness - centroidBlueness;
 
-    // Centroid is already at least as blue as its ring - the
-    // colour shouldn't drag it anywhere.
+    // Already at least as low as its ring - don't drag it.
     if (difference <= 0) {
         return centroid;
     }
-
-    // --------------------------------------------------------
-    // Shift proportional to the difference: big difference
-    // (centroid stuck in yellow) moves it a lot, small
-    // difference nudges it gently.
-    // --------------------------------------------------------
 
     const shift =
         difference *
@@ -1496,31 +2109,18 @@ function relaxPoints() {
         );
 
     // --------------------------------------------------------
-    // For each point: the fake centroid of its Voronoi cell
-    // still applies as the baseline pull (keeps points evenly
-    // spaced). On top of that, compare the point's own current
-    // color to each of its cell's vertex colors:
-    //   - vertex bluer than the point  -> diff positive -> pull
-    //     the point toward that vertex
-    //   - vertex more yellow than the point -> diff negative ->
-    //     push the point away from that vertex
-    //   - equal color -> diff is 0 -> that vertex contributes
-    //     no color-driven movement at all
-    // The size of the step from each vertex scales with how big
-    // the color difference is, so a stark blue/yellow contrast
-    // moves the point a lot in one iteration, while a subtle
-    // difference barely moves it.
+    // LERP each point toward its cell's fake centroid. That
+    // centroid is already colour-steered - getFakeCentroid()
+    // shifts it toward the average blue direction by an amount
+    // proportional to how much bluer the cell's ring is than
+    // the centroid's own spot - so points in yellow areas get
+    // a target pulled far toward blue and move fast, while
+    // points already on blue ground get a plain geometric
+    // centroid and just even out their spacing.
     // insidePoints holds references to the same objects that
     // live in `points`, so mutating them here updates `points`
     // too.
     // --------------------------------------------------------
-
-    // Pixels moved per unit of color difference (diff maxes out
-    // around +-1, since blueness is 0..1). Tied to point spacing
-    // (R) so bigger/sparser point sets get proportionally bigger
-    // steps.
-    const COLOR_STEP_SCALE =
-        Math.max(3, R);
 
     for (let i = 0; i < insidePoints.length; i++) {
 
@@ -1541,64 +2141,15 @@ function relaxPoints() {
         const point =
             insidePoints[i];
 
-        // Blueness (0..1, higher = bluer) of the point's
-        // current position, used as the comparison baseline
-        // for every vertex in its cell.
-        const centerBlueness =
-            1 - getViridisTAt(point.x, point.y);
-
-        let colorStepX = 0;
-        let colorStepY = 0;
-
-        for (const vertex of polygon) {
-
-            const vertexBlueness =
-                1 - getViridisTAt(vertex[0], vertex[1]);
-
-            // Positive: vertex is bluer than the point (pull
-            // toward it). Negative: vertex is more yellow
-            // (push away from it). Zero: no color influence.
-            const diff =
-                vertexBlueness - centerBlueness;
-
-            if (diff === 0) {
-                continue;
-            }
-
-            const dx = vertex[0] - point.x;
-            const dy = vertex[1] - point.y;
-
-            const dist =
-                Math.hypot(dx, dy);
-
-            if (dist < 1e-6) {
-                continue;
-            }
-
-            const unitX = dx / dist;
-            const unitY = dy / dist;
-
-            colorStepX +=
-                diff * COLOR_STEP_SCALE * unitX;
-
-            colorStepY +=
-                diff * COLOR_STEP_SCALE * unitY;
-        }
-
-        colorStepX /= polygon.length;
-        colorStepY /= polygon.length;
-
         point.x =
             point.x +
             (centroid.x - point.x) *
-            LERP_AMOUNT +
-            colorStepX;
+            LERP_AMOUNT;
 
         point.y =
             point.y +
             (centroid.y - point.y) *
-            LERP_AMOUNT +
-            colorStepY;
+            LERP_AMOUNT;
 
         point.x =
             Math.max(
@@ -1720,18 +2271,26 @@ function placeFacilities() {
         getBoundaryPolygonPoints(200)
             .map(q => [q.x, q.y]);
 
+    const candidates =
+        raw.map(p => ({
+            x: p.x + extent[0],
+            y: p.y + extent[1]
+        }));
+
+    const inCity =
+        candidates.filter(p =>
+            d3.polygonContains(
+                cityPolygon,
+                [p.x, p.y]
+            )
+        );
+
+    // A facility can no more sit in the ocean than a block can.
     facilityPoints =
-        raw
-            .map(p => ({
-                x: p.x + extent[0],
-                y: p.y + extent[1]
-            }))
-            .filter(p =>
-                d3.polygonContains(
-                    cityPolygon,
-                    [p.x, p.y]
-                )
-            );
+        inCity.filter(p => isLand(p.x, p.y));
+
+    const drowned =
+        inCity.length - facilityPoints.length;
 
     facilityStepScale = 1;
 
@@ -1741,7 +2300,10 @@ function placeFacilities() {
 
     logStep(
         `Placed ${facilityPoints.length} facilities ` +
-        `(spacing ${facilityR}).`
+        `(spacing ${facilityR})` +
+        (drowned > 0
+            ? `; rejected ${drowned} below ${seaLevelM} m.`
+            : ".")
     );
 
     status.textContent =
@@ -2239,14 +2801,17 @@ function runEpoch() {
         const nextY =
             facility.y + moveY * facilityStepScale;
 
-        // Facilities must stay inside the city.
-        if (
+        // Facilities must stay inside the city AND on land -
+        // the load-balancing force will happily walk one out
+        // over a bay otherwise.
+        const insideCity =
             !cityPolygon.length ||
             d3.polygonContains(
                 cityPolygon,
                 [nextX, nextY]
-            )
-        ) {
+            );
+
+        if (insideCity && isLand(nextX, nextY)) {
             facility.x = nextX;
             facility.y = nextY;
         }
@@ -2399,129 +2964,401 @@ function stopOptimization() {
 
 
 // ============================================================
-// MAP CLICK
+// CLOSE THE CITY
+// ============================================================
+//
+// Called either by clicking near the first boundary vertex or
+// by the Close City Boundary button.
 // ============================================================
 
-viewport.addEventListener(
+function closeCity() {
+
+    if (cityClosed || boundaryPoints.length < 3) {
+        return false;
+    }
+
+    cityClosed = true;
+
+
+    // Drop every base point that sits below sea level. These are
+    // deleted outright, not just hidden, so they stop generating
+    // Voronoi cells and stop counting as demand for the metric.
+    const beforeCount = points.length;
+
+    points =
+        points.filter(p => isLand(p.x, p.y));
+
+    const drowned =
+        beforeCount - points.length;
+
+
+    drawBoundary();
+    drawPoints();
+    drawVoronoi();
+
+    relaxBtn.disabled = false;
+    placeFacilitiesBtn.disabled = false;
+
+    status.textContent =
+        "City boundary closed. Press \"Relax Points\" to relax.";
+
+    logStep(
+        `City boundary closed (${boundaryPoints.length} vertices)` +
+        (drowned > 0
+            ? `; removed ${drowned} points below ${seaLevelM} m.`
+            : ".")
+    );
+
+    return true;
+}
+
+
+closeBtn.addEventListener(
     "click",
-    event => {
+    () => {
 
-        // Don't create boundary points when
-        // clicking the controls.
-
-        if (
-            event.target.closest &&
-            event.target.closest("#controls")
-        ) {
+        if (cityClosed) {
+            status.textContent =
+                "City is already closed. Use Reset City to start over.";
             return;
         }
 
+        if (boundaryPoints.length < 3) {
+            status.textContent =
+                "Click at least 3 points on the map first.";
+            return;
+        }
+
+        closeCity();
+    }
+);
+
+
+// ============================================================
+// MAP CLICK
+// ============================================================
+
+// ============================================================
+// PAN + MAP CLICK
+// ============================================================
+//
+// Left-drag pans the world. A left press that moves less than
+// CLICK_SLOP pixels is treated as a click instead, so dropping
+// boundary points still works exactly as before - you only pan
+// when you actually drag.
+//
+// Middle-drag always pans regardless of distance, which is
+// handy once the city is closed and clicks do nothing anyway.
+// ============================================================
+
+const CLICK_SLOP = 4;
+
+let panning = false;
+let panButton = -1;
+
+let panStartClientX = 0;
+let panStartClientY = 0;
+
+let panStartCameraX = 0;
+let panStartCameraY = 0;
+
+let panMoved = 0;
+
+
+function isPanExempt(target) {
+
+    // Never pan when the press started on the panels or on a
+    // draggable boundary vertex.
+    return (
+        target &&
+        target.closest &&
+        (
+            target.closest("#controls") ||
+            target.closest("#logPanel") ||
+            target.closest(".boundary-vertex")
+        )
+    );
+}
+
+
+viewport.addEventListener(
+    "pointerdown",
+    event => {
+
+        if (isPanExempt(event.target)) {
+            return;
+        }
 
         if (!WORLD_WIDTH || !WORLD_HEIGHT) {
             return;
         }
 
+        // Left or middle button only.
+        if (event.button !== 0 && event.button !== 1) {
+            return;
+        }
 
-        const p =
-            screenToWorld(
-                event.clientX,
-                event.clientY
+        panning = true;
+        panButton = event.button;
+        panMoved = 0;
+
+        panStartClientX = event.clientX;
+        panStartClientY = event.clientY;
+
+        panStartCameraX = cameraX;
+        panStartCameraY = cameraY;
+
+        viewport.setPointerCapture(event.pointerId);
+
+        // Middle-click autoscroll would otherwise hijack this.
+        if (event.button === 1) {
+            event.preventDefault();
+        }
+    }
+);
+
+
+viewport.addEventListener(
+    "pointermove",
+    event => {
+
+        if (!panning) {
+            return;
+        }
+
+        const dx = event.clientX - panStartClientX;
+        const dy = event.clientY - panStartClientY;
+
+        panMoved =
+            Math.max(
+                panMoved,
+                Math.hypot(dx, dy)
+            );
+
+        // A left press only becomes a pan once it clears the
+        // slop, so small hand tremors don't eat a click.
+        if (
+            panButton === 0 &&
+            panMoved < CLICK_SLOP
+        ) {
+            return;
+        }
+
+        viewport.classList.add("panning");
+
+        cameraX = panStartCameraX + dx;
+        cameraY = panStartCameraY + dy;
+
+        updateCamera();
+    }
+);
+
+
+function endPan(event) {
+
+    if (!panning) {
+        return false;
+    }
+
+    panning = false;
+
+    viewport.classList.remove("panning");
+
+    if (viewport.hasPointerCapture(event.pointerId)) {
+        viewport.releasePointerCapture(event.pointerId);
+    }
+
+    // Did this gesture count as a pan, or as a click?
+    return panButton === 0 && panMoved < CLICK_SLOP;
+}
+
+
+viewport.addEventListener(
+    "pointerup",
+    event => {
+
+        const wasClick = endPan(event);
+
+        if (!wasClick) {
+            return;
+        }
+
+        handleMapClick(event.clientX, event.clientY);
+    }
+);
+
+
+viewport.addEventListener(
+    "pointercancel",
+    event => {
+        endPan(event);
+    }
+);
+
+
+// ------------------------------------------------------------
+// Dropping / closing boundary points
+// ------------------------------------------------------------
+
+function handleMapClick(clientX, clientY) {
+
+    if (!WORLD_WIDTH || !WORLD_HEIGHT) {
+        return;
+    }
+
+
+    const p =
+        screenToWorld(clientX, clientY);
+
+
+    // ----------------------------------------------------
+    // Do not allow boundary points outside the map
+    // ----------------------------------------------------
+
+    if (
+        p.x < 0 ||
+        p.x > WORLD_WIDTH ||
+        p.y < 0 ||
+        p.y > WORLD_HEIGHT
+    ) {
+        return;
+    }
+
+
+    // ----------------------------------------------------
+    // If already closed, don't add points
+    // ----------------------------------------------------
+
+    if (cityClosed) {
+        return;
+    }
+
+
+    // ----------------------------------------------------
+    // Close if clicking near first point
+    // ----------------------------------------------------
+
+    if (
+        boundaryPoints.length >= 3
+    ) {
+
+        const first =
+            boundaryPoints[0];
+
+
+        const distance =
+            Math.hypot(
+                p.x - first.x,
+                p.y - first.y
             );
 
 
-        // ----------------------------------------------------
-        // Do not allow boundary points outside the map
-        // ----------------------------------------------------
+        if (distance <
+            15 / zoomScale
+        ) {
+
+            closeCity();
+
+            return;
+        }
+    }
+
+
+    // ----------------------------------------------------
+    // Add point
+    // ----------------------------------------------------
+
+    boundaryPoints.push({
+        x: p.x,
+        y: p.y
+    });
+
+
+    drawBoundary();
+
+
+    status.textContent =
+        `Boundary points: ${boundaryPoints.length}. ` +
+        `Click near the first point to close.`;
+
+    logStep(
+        `Boundary point ${boundaryPoints.length} added.`
+    );
+}
+
+
+// ------------------------------------------------------------
+// Keyboard panning
+// ------------------------------------------------------------
+
+window.addEventListener(
+    "keydown",
+    event => {
+
+        // Don't steal arrow keys from the number inputs and
+        // sliders in the control panel.
+        const t = event.target;
 
         if (
-            p.x < 0 ||
-            p.x > WORLD_WIDTH ||
-            p.y < 0 ||
-            p.y > WORLD_HEIGHT
+            t &&
+            (
+                t.tagName === "INPUT" ||
+                t.tagName === "SELECT" ||
+                t.tagName === "TEXTAREA" ||
+                t.isContentEditable
+            )
         ) {
             return;
         }
 
-
-        // ----------------------------------------------------
-        // If already closed, don't add points
-        // ----------------------------------------------------
-
-        if (cityClosed) {
+        if (!WORLD_WIDTH) {
             return;
         }
 
+        const step = event.shiftKey ? 200 : 60;
 
-        // ----------------------------------------------------
-        // Close if clicking near first point
-        // ----------------------------------------------------
+        let dx = 0;
+        let dy = 0;
 
-        if (
-            boundaryPoints.length >= 3
-        ) {
+        switch (event.key) {
+            case "ArrowLeft":  dx = step;  break;
+            case "ArrowRight": dx = -step; break;
+            case "ArrowUp":    dy = step;  break;
+            case "ArrowDown":  dy = -step; break;
 
-            const first =
-                boundaryPoints[0];
-
-
-            const distance =
-                Math.hypot(
-                    p.x - first.x,
-                    p.y - first.y
-                );
-
-
-            if (distance <
-                15 / zoomScale
-            ) {
-
-                cityClosed = true;
-
-
+            // Re-centre if you lose the map entirely.
+            case "0":
+            case "Home":
+                zoomScale = 1;
+                centerWorld();
+                drawPoints();
                 drawBoundary();
-		drawPoints();
-
-                status.textContent =
-                    "City boundary closed. Press \"Relax Points\" to relax.";
-
-
                 drawVoronoi();
-
-
-                relaxBtn.disabled = false;
-                placeFacilitiesBtn.disabled = false;
-
-
-                logStep(
-                    `City boundary closed (${boundaryPoints.length} vertices).`
-                );
-
-
+                drawFacilities();
+                event.preventDefault();
                 return;
-            }
+
+            default:
+                return;
         }
 
+        cameraX += dx;
+        cameraY += dy;
 
-        // ----------------------------------------------------
-        // Add point
-        // ----------------------------------------------------
+        updateCamera();
 
-        boundaryPoints.push({
-            x: p.x,
-            y: p.y
-        });
-
-
-        drawBoundary();
+        event.preventDefault();
+    }
+);
 
 
-        status.textContent =
-            `Boundary points: ${boundaryPoints.length}. ` +
-            `Click near the first point to close.`;
-
-        logStep(
-            `Boundary point ${boundaryPoints.length} added.`
-        );
+// Middle-click paste/autoscroll on Linux would fight the pan.
+viewport.addEventListener(
+    "auxclick",
+    event => {
+        if (event.button === 1) {
+            event.preventDefault();
+        }
     }
 );
 
@@ -2737,6 +3574,70 @@ kSlider.addEventListener(
 // VORONOI TOGGLE
 // ============================================================
 
+seaLevelInput.addEventListener(
+    "change",
+    () => {
+
+        seaLevelM = Number(seaLevelInput.value) || 0;
+
+        renderTerrain();
+
+        if (cityClosed) {
+
+            const before = points.length;
+
+            points =
+                points.filter(p => isLand(p.x, p.y));
+
+            const drowned = before - points.length;
+
+            const facBefore = facilityPoints.length;
+
+            facilityPoints =
+                facilityPoints.filter(p => isLand(p.x, p.y));
+
+            const facDrowned =
+                facBefore - facilityPoints.length;
+
+            if (drowned > 0 || facDrowned > 0) {
+                logStep(
+                    `Sea level ${seaLevelM} m: removed ${drowned} points` +
+                    (facDrowned > 0
+                        ? ` and ${facDrowned} facilities.`
+                        : ".")
+                );
+            }
+
+            optimizeBtn.disabled =
+                facilityPoints.length < 2;
+
+            draw();
+            evaluateMetric();
+
+        } else {
+
+            logStep(`Sea level set to ${seaLevelM} m.`);
+        }
+    }
+);
+
+
+sobelToggle.addEventListener(
+    "change",
+    () => {
+
+        renderTerrain();
+
+        logStep(
+            sobelToggle.checked
+                ? `Showing Sobel slope map (white = steep, ` +
+                  `max ${(slopeMaxRatio * 100).toFixed(0)}% grade).`
+                : "Showing elevation map."
+        );
+    }
+);
+
+
 voronoiToggle.addEventListener(
     "change",
     () => {
@@ -2842,6 +3743,42 @@ facilityToggle.addEventListener(
                 : "Facility layer hidden."
         );
     }
+);
+
+
+
+// ============================================================
+// TABS
+// ============================================================
+
+const tabButtons =
+    document.querySelectorAll("#tabBar .tab");
+
+const tabPanels =
+    document.querySelectorAll("#tabBody .tab-panel");
+
+function showTab(name) {
+
+    tabButtons.forEach(b =>
+        b.classList.toggle(
+            "active",
+            b.dataset.tab === name
+        )
+    );
+
+    tabPanels.forEach(p =>
+        p.classList.toggle(
+            "active",
+            p.dataset.panel === name
+        )
+    );
+}
+
+tabButtons.forEach(b =>
+    b.addEventListener(
+        "click",
+        () => showTab(b.dataset.tab)
+    )
 );
 
 

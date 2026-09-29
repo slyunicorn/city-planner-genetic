@@ -16,7 +16,7 @@
     <!-- Everything inside this moves/zooms together -->
     <div id="world">
 
-        <img id="map" src="./altitude-map.png" alt="Altitude map">
+        <canvas id="map"></canvas>
 
         <svg id="viz">
             <defs>
@@ -45,125 +45,194 @@
         <span id="drag-hint">⠿</span>
     </div>
 
-    <div class="control-section">
-        <label>
-            <span>R</span>
-            <span id="rValue">18</span>
+
+    <!-- =========================================================
+         TABS
+         ========================================================= -->
+
+    <div id="tabBar" role="tablist">
+        <button class="tab active" data-tab="terrain" role="tab">Terrain</button>
+        <button class="tab" data-tab="blocks" role="tab">Blocks</button>
+        <button class="tab" data-tab="facilities" role="tab">Facilities</button>
+    </div>
+
+
+    <div id="tabBody">
+
+        <!-- ---------------------------------------------------
+             TERRAIN
+             --------------------------------------------------- -->
+
+        <section class="tab-panel active" data-panel="terrain">
+
+            <div class="control-section">
+                <div class="field-row">
+                    <label class="field">
+                        <span>Latitude</span>
+                        <input id="latInput" type="number" step="0.0001" value="12.9229">
+                    </label>
+
+                    <label class="field">
+                        <span>Longitude</span>
+                        <input id="lonInput" type="number" step="0.0001" value="80.1275">
+                    </label>
+                </div>
+
+                <div class="field-row">
+                    <label class="field">
+                        <span>Radius (m)</span>
+                        <input id="distInput" type="number" step="100" min="100" value="3000">
+                    </label>
+
+                    <label class="field">
+                        <span>Sea level (m)</span>
+                        <input id="seaLevelInput" type="number" step="1" value="0">
+                    </label>
+                </div>
+
+                <div class="field-row">
+                    <label class="field">
+                        <span>Grid</span>
+                        <select id="sizeSelect">
+                            <option value="256">256</option>
+                            <option value="512" selected>512</option>
+                            <option value="1024">1024</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+
+            <button id="loadTerrainBtn">
+                Load Terrain
+            </button>
+
+            <div id="scaleNote">Loading terrain...</div>
+
+        </section>
+
+
+        <!-- ---------------------------------------------------
+             BLOCKS
+             --------------------------------------------------- -->
+
+        <section class="tab-panel" data-panel="blocks">
+
+            <div class="control-section">
+                <label>
+                    <span>R (spacing)</span>
+                    <span id="rValue">18</span>
+                </label>
+
+                <input id="rSlider" type="range" min="3" max="100" value="18">
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>K (attempts)</span>
+                    <span id="kValue">30</span>
+                </label>
+
+                <input id="kSlider" type="range" min="1" max="100" value="30">
+            </div>
+
+            <button id="generateBtn">
+                Generate Poisson Points
+            </button>
+
+            <button id="closeBtn">
+                Close City Boundary
+            </button>
+
+            <div class="control-section">
+                <label>
+                    <span>Relax Iterations</span>
+                    <span id="relaxIterationsValue">50</span>
+                </label>
+
+                <input id="relaxIterationsSlider" type="range" min="1" max="300" value="50">
+            </div>
+
+            <button id="relaxBtn" disabled>
+                Relax Points
+            </button>
+
+        </section>
+
+
+        <!-- ---------------------------------------------------
+             FACILITIES
+             --------------------------------------------------- -->
+
+        <section class="tab-panel" data-panel="facilities">
+
+            <div class="control-section">
+                <label>
+                    <span>Facility Spacing</span>
+                    <span id="facilityRValue">90</span>
+                </label>
+
+                <input id="facilityRSlider" type="range" min="20" max="300" value="90">
+            </div>
+
+            <button id="placeFacilitiesBtn" disabled>
+                Place Facilities
+            </button>
+
+            <div class="control-section">
+                <label>
+                    <span>Epochs</span>
+                    <span id="epochsValue">100</span>
+                </label>
+
+                <input id="epochsSlider" type="range" min="1" max="500" value="100">
+            </div>
+
+            <button id="optimizeBtn" disabled>
+                Optimize City Plan
+            </button>
+
+            <div id="metric">
+                <div id="metricLabel">Score</div>
+                <div id="metricScore">--</div>
+                <div id="metricDetail">Place facilities to measure.</div>
+            </div>
+
+        </section>
+
+    </div>
+
+
+    <!-- =========================================================
+         ALWAYS VISIBLE — layer toggles, reset, status
+         ========================================================= -->
+
+    <div id="layerBar">
+
+        <div class="layer-title">Layers</div>
+
+        <label class="checkbox-row">
+            <input id="sobelToggle" type="checkbox">
+            Sobel Slope Map
         </label>
 
-        <input
-            id="rSlider"
-            type="range"
-            min="3"
-            max="100"
-            value="18"
-        >
-    </div>
-
-    <div class="control-section">
-        <label>
-            <span>K</span>
-            <span id="kValue">30</span>
+        <label class="checkbox-row">
+            <input id="voronoiToggle" type="checkbox">
+            Voronoi Diagram
         </label>
 
-        <input
-            id="kSlider"
-            type="range"
-            min="1"
-            max="100"
-            value="30"
-        >
-    </div>
-
-    <button id="generateBtn">
-        Generate Poisson Points
-    </button>
-
-    <button id="closeBtn">
-        Close City
-    </button>
-
-    <button id="resetBtn">
-        Reset
-    </button>
-
-    <div class="control-section">
-        <label>
-            <span>Relax Iterations</span>
-            <span id="relaxIterationsValue">50</span>
+        <label class="checkbox-row">
+            <input id="facilityToggle" type="checkbox" checked>
+            Facility Layer
         </label>
 
-        <input
-            id="relaxIterationsSlider"
-            type="range"
-            min="1"
-            max="300"
-            value="50"
-        >
-    </div>
+        <button id="resetBtn" class="ghost">
+            Reset City
+        </button>
 
-    <button id="relaxBtn" disabled>
-        Relax Points
-    </button>
+        <div id="status">
+            Loading terrain...
+        </div>
 
-    <div class="section-divider">Facilities</div>
-
-    <div class="control-section">
-        <label>
-            <span>Facility Spacing</span>
-            <span id="facilityRValue">90</span>
-        </label>
-
-        <input
-            id="facilityRSlider"
-            type="range"
-            min="20"
-            max="300"
-            value="90"
-        >
-    </div>
-
-    <button id="placeFacilitiesBtn" disabled>
-        Place Facilities
-    </button>
-
-    <div class="control-section">
-        <label>
-            <span>Epochs</span>
-            <span id="epochsValue">100</span>
-        </label>
-
-        <input
-            id="epochsSlider"
-            type="range"
-            min="1"
-            max="500"
-            value="100"
-        >
-    </div>
-
-    <button id="optimizeBtn" disabled>
-        Optimize City Plan
-    </button>
-
-    <div id="metric">
-        <div id="metricLabel">Score</div>
-        <div id="metricScore">--</div>
-        <div id="metricDetail">Place facilities to measure.</div>
-    </div>
-
-    <label class="checkbox-row">
-        <input id="voronoiToggle" type="checkbox">
-        Show Voronoi Diagram
-    </label>
-
-    <label class="checkbox-row">
-        <input id="facilityToggle" type="checkbox" checked>
-        Show Facility Layer
-    </label>
-
-    <div id="status">
-        Loading map...
     </div>
 
 </div>

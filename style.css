@@ -17,6 +17,18 @@ body {
     inset: 0;
     overflow: hidden;
     touch-action: none;
+
+    cursor: grab;
+}
+
+#viewport.panning {
+    cursor: grabbing;
+}
+
+/* The boundary vertices keep their own grab cursor, which would
+   otherwise be overridden by the viewport's. */
+#viewport .boundary-vertex {
+    cursor: grab;
 }
 
 
@@ -36,10 +48,14 @@ body {
 
 
 /* =========================================================
-   MAP
+   MAP (terrain canvas)
    ========================================================= */
 
 #map {
+    /* Terrain is a small grid scaled up; keep the pixels crisp
+       instead of letting the browser smooth them into mush. */
+    image-rendering: pixelated;
+
     position: absolute;
 
     left: 0;
@@ -180,11 +196,20 @@ body {
     left: 20px;
     top: 20px;
 
-    width: 240px;
+    width: 250px;
+
+    /* Cap the height so the panel never covers the whole map;
+       only the tab body scrolls, so the layer toggles below it
+       stay pinned and visible. */
+    max-height: calc(100vh - 40px);
+
+    display: flex;
+
+    flex-direction: column;
 
     z-index: 1000;
 
-    padding: 0 0 14px;
+    padding: 0;
 
     background: rgba(15, 15, 15, 0.94);
 
@@ -206,6 +231,8 @@ body {
    ========================================================= */
 
 #controls-header {
+    flex: 0 0 auto;
+
     height: 38px;
 
     display: flex;
@@ -254,6 +281,189 @@ body {
 
 input[type="range"] {
     width: 100%;
+}
+
+
+/* =========================================================
+   TABS
+   ========================================================= */
+
+#tabBar {
+    flex: 0 0 auto;
+
+    display: flex;
+
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.tab {
+    /* Override the global button rule, which is block+margins. */
+    flex: 1;
+
+    width: auto;
+
+    margin: 0;
+
+    padding: 9px 4px;
+
+    font-size: 12px;
+
+    color: #999;
+
+    background: transparent;
+
+    border: none;
+
+    border-bottom: 2px solid transparent;
+
+    border-radius: 0;
+
+    cursor: pointer;
+}
+
+.tab:hover {
+    color: #ddd;
+
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.tab.active {
+    color: #00d9ff;
+
+    font-weight: bold;
+
+    border-bottom-color: #00d9ff;
+}
+
+#tabBody {
+    /* The only scrolling region. Everything below stays put. */
+    flex: 1 1 auto;
+
+    min-height: 0;
+
+    overflow-y: auto;
+
+    padding-bottom: 12px;
+}
+
+.tab-panel {
+    display: none;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+
+/* =========================================================
+   LAYER BAR (always visible)
+   ========================================================= */
+
+#layerBar {
+    flex: 0 0 auto;
+
+    padding: 8px 0 10px;
+
+    background: rgba(255, 255, 255, 0.04);
+
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+
+    border-radius: 0 0 10px 10px;
+}
+
+.layer-title {
+    margin: 0 12px 6px;
+
+    font-size: 10px;
+
+    letter-spacing: 0.08em;
+
+    text-transform: uppercase;
+
+    color: #888;
+}
+
+#layerBar .checkbox-row {
+    margin: 5px 12px;
+}
+
+button.ghost {
+    margin-top: 10px;
+
+    background: transparent;
+
+    border: 1px solid rgba(255, 255, 255, 0.2);
+
+    color: #bbb;
+
+    font-size: 12px;
+}
+
+button.ghost:hover {
+    background: rgba(255, 255, 255, 0.08);
+
+    color: white;
+}
+
+
+/* =========================================================
+   TERRAIN FIELDS
+   ========================================================= */
+
+.field-row {
+    display: flex;
+
+    gap: 8px;
+
+    margin-bottom: 8px;
+}
+
+.field {
+    flex: 1;
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: 3px;
+
+    font-size: 11px;
+
+    color: #bbb;
+}
+
+.field input,
+.field select {
+    width: 100%;
+
+    box-sizing: border-box;
+
+    padding: 5px 6px;
+
+    font-size: 12px;
+
+    color: white;
+
+    background: #1c1c1c;
+
+    border: 1px solid rgba(255, 255, 255, 0.18);
+
+    border-radius: 4px;
+}
+
+.field input:focus,
+.field select:focus {
+    outline: none;
+
+    border-color: #00d9ff;
+}
+
+#scaleNote {
+    margin: 8px 12px 0;
+
+    font-size: 11px;
+
+    color: #7fd8ff;
 }
 
 
@@ -388,7 +598,7 @@ button:disabled:hover {
    ========================================================= */
 
 #status {
-    margin: 12px;
+    margin: 10px 12px 0;
 
     font-size: 12px;
 
