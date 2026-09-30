@@ -12,6 +12,7 @@ const mapElement = document.getElementById("map");
 const svg = d3.select("#viz");
 
 const voronoiLayer = d3.select("#voronoiLayer");
+const urquhartLayer = d3.select("#urquhartLayer");
 const boundaryLayer = d3.select("#boundaryLayer");
 const pointLayer = d3.select("#pointLayer");
 const facilityVoronoiLayer = d3.select("#facilityVoronoiLayer");
@@ -41,8 +42,6 @@ const sizeSelect = document.getElementById("sizeSelect");
 const loadTerrainBtn = document.getElementById("loadTerrainBtn");
 const scaleNote = document.getElementById("scaleNote");
 
-const facilityRSlider = document.getElementById("facilityRSlider");
-const facilityRValue = document.getElementById("facilityRValue");
 const placeFacilitiesBtn = document.getElementById("placeFacilitiesBtn");
 
 const epochsSlider = document.getElementById("epochsSlider");
@@ -52,7 +51,27 @@ const optimizeBtn = document.getElementById("optimizeBtn");
 const seaLevelInput = document.getElementById("seaLevelInput");
 const sobelToggle = document.getElementById("sobelToggle");
 const voronoiToggle = document.getElementById("voronoiToggle");
-const facilityToggle = document.getElementById("facilityToggle");
+const urquhartToggle = document.getElementById("urquhartToggle");
+const extraEdgeSlider = document.getElementById("extraEdgeSlider");
+const extraEdgeValue = document.getElementById("extraEdgeValue");
+const pruneToggle = document.getElementById("pruneToggle");
+const facilityLinkSlider = document.getElementById("facilityLinkSlider");
+const facilityLinkValue = document.getElementById("facilityLinkValue");
+const roadStats = document.getElementById("roadStats");
+const straightenSlider = document.getElementById("straightenSlider");
+const straightenValue = document.getElementById("straightenValue");
+const attemptsSlider = document.getElementById("attemptsSlider");
+const attemptsValue = document.getElementById("attemptsValue");
+const speedSlider = document.getElementById("speedSlider");
+const speedValue = document.getElementById("speedValue");
+const junctionToggle = document.getElementById("junctionToggle");
+const junctionRadiusSlider = document.getElementById("junctionRadiusSlider");
+const junctionRadiusValue = document.getElementById("junctionRadiusValue");
+const reductionSlider = document.getElementById("reductionSlider");
+const reductionValue = document.getElementById("reductionValue");
+const simplifyKSlider = document.getElementById("simplifyKSlider");
+const simplifyKValue = document.getElementById("simplifyKValue");
+const simplifyBtn = document.getElementById("simplifyBtn");
 
 const metricScore = document.getElementById("metricScore");
 const metricDetail = document.getElementById("metricDetail");
@@ -137,6 +156,25 @@ let K = Number(kSlider.value);
 // RELAXATION STATE
 // ============================================================
 
+// Set whenever something the road network is DERIVED from
+// changes: the blocks moved, the boundary changed, facilities
+// moved, or a Roads parameter was touched. Zoom and pan do NOT
+// set it, so redrawing at a new zoom re-renders the network you
+// already have instead of regenerating it - which used to throw
+// away every simplification the moment you scrolled.
+//
+// Declared up here with the other state: loadTerrainFromControls()
+// runs at startup and reaches invalidateRoadNetwork(), so a `let`
+// further down the file would still be in its temporal dead zone
+// and throw.
+let roadNetworkDirty = true;
+
+
+function invalidateRoadNetwork() {
+    roadNetworkDirty = true;
+}
+
+
 let relaxing = false;
 
 const LERP_AMOUNT = 0.2;
@@ -154,7 +192,109 @@ const LERP_AMOUNT = 0.2;
 // and act as the "demand" the metric is measured against.
 // ============================================================
 
-let facilityPoints = [];
+// ============================================================
+// FACILITY LAYERS
+// ============================================================
+//
+// Three layers taken from the OpenStreetMap Map Features
+// taxonomy, each rendered in its own colour with its own
+// Voronoi service areas and Delaunay adjacency graph.
+//
+// `groups` lists the OSM sub-categories that belong to each
+// layer. They are descriptive for now - the generator places
+// abstract sites, not tagged OSM objects - but they fix what
+// each layer means and are what a future OSM import would
+// query against.
+//
+// Spacing defaults reflect how far apart each kind of thing
+// actually sits: emergency services are sparse and strategic,
+// amenities mid-density, shops dense.
+// ============================================================
+
+const FACILITY_LAYERS = [
+    {
+        key: "emergency",
+        label: "Emergency",
+        osmKey: "emergency",
+        color: "#FF3B3B",
+        fill: "rgba(255, 60, 60, 0.06)",
+        spacing: 140,
+        groups: [
+            "Medical rescue",
+            "Firefighters",
+            "Lifeguards",
+            "Assembly point",
+            "Other structure"
+        ],
+        points: [],
+        metric: null,
+        stepScale: 1,
+        drowned: 0,
+        visible: true,
+        showCells: true,
+        showDelaunay: false
+    },
+    {
+        key: "amenity",
+        label: "Amenity",
+        osmKey: "amenity",
+        color: "#FFC93C",
+        fill: "rgba(255, 201, 60, 0.06)",
+        spacing: 90,
+        groups: [
+            "Sustenance",
+            "Education",
+            "Transportation",
+            "Financial",
+            "Healthcare",
+            "Entertainment, Arts & Culture",
+            "Public Service",
+            "Facilities",
+            "Waste Management"
+        ],
+        points: [],
+        metric: null,
+        stepScale: 1,
+        drowned: 0,
+        visible: true,
+        showCells: true,
+        showDelaunay: false
+    },
+    {
+        key: "shop",
+        label: "Shop",
+        osmKey: "shop",
+        color: "#B36BFF",
+        fill: "rgba(179, 107, 255, 0.06)",
+        spacing: 55,
+        groups: [
+            "Food, beverages",
+            "General store, department store, mall",
+            "Clothing, shoes, accessories",
+            "Discount store, charity",
+            "Health and beauty",
+            "Do-it-yourself, household, building materials, gardening",
+            "Furniture and interior",
+            "Electronics",
+            "Outdoors and sport, vehicles",
+            "Art, music, hobbies",
+            "Stationery, gifts, books, newspapers",
+            "Others"
+        ],
+        points: [],
+        metric: null,
+        stepScale: 1,
+        drowned: 0,
+        visible: true,
+        showCells: true,
+        showDelaunay: false
+    }
+];
+
+
+function layerByKey(key) {
+    return FACILITY_LAYERS.find(l => l.key === key);
+}
 
 let optimizing = false;
 
@@ -162,9 +302,7 @@ let optimizing = false;
 // can both read it without recomputing.
 let currentMetric = null;
 
-// Adaptive move size for the optimizer. Grows while the score
-// keeps improving, shrinks when an epoch makes things worse.
-let facilityStepScale = 1;
+// Adaptive move size is tracked per layer (layer.stepScale).
 
 
 // ============================================================
@@ -964,9 +1102,17 @@ async function loadTerrainFromControls() {
     stopRelaxation();
     stopOptimization();
 
+    invalidateRoadNetwork();
+
     boundaryPoints = [];
     cityClosed = false;
-    facilityPoints = [];
+
+    for (const layer of FACILITY_LAYERS) {
+        layer.points = [];
+        layer.metric = null;
+        layer.stepScale = 1;
+    }
+
     currentMetric = null;
 
     cityClipPath.attr("d", "");
@@ -1391,6 +1537,8 @@ function generatePoints() {
     console.time("Poisson");
 
 
+    invalidateRoadNetwork();
+
     points =
         poissonDiscSampling(
             WORLD_WIDTH,
@@ -1432,6 +1580,8 @@ function draw() {
     drawBoundary();
 
     drawVoronoi();
+
+    drawUrquhart();
 
     drawFacilities();
 
@@ -1817,6 +1967,2303 @@ function drawBoundary() {
 
 
 // ============================================================
+// URQUHART GRAPH — the building network
+// ============================================================
+//
+// Each base point is a building. The Urquhart graph connects
+// them into a street-like network:
+//
+//   1. Triangulate the buildings (Delaunay).
+//   2. From every triangle, delete its LONGEST edge.
+//   3. Whatever survives is the network.
+//
+// An edge shared by two triangles is deleted if it is longest
+// in either of them.
+//
+// Why this graph and not the raw Delaunay: Delaunay connects
+// far more pairs than a real street layout does, including
+// long thin slivers along the boundary. Urquhart strips those
+// while provably keeping the network connected - by the MST
+// cycle property the longest edge of a triangle can never be
+// in the Euclidean minimum spanning tree, so deleting it never
+// disconnects anything. EMST is a subgraph of Urquhart, which
+// is a subgraph of Delaunay.
+//
+// (Urquhart proposed it as a cheap approximation of the
+// relative neighbourhood graph. The two are not always equal -
+// Toussaint later found counterexamples - but it stays a good
+// approximation and is far cheaper to build.)
+// ============================================================
+
+function computeUrquhartSplit(pts) {
+
+    if (pts.length < 3) {
+        return { kept: [], removed: [] };
+    }
+
+    const delaunay =
+        d3.Delaunay.from(
+            pts,
+            d => d.x,
+            d => d.y
+        );
+
+    const triangles = delaunay.triangles;
+
+    const edgeKey = (a, b) =>
+        a < b ? `${a},${b}` : `${b},${a}`;
+
+    const lengthSq = (a, b) => {
+        const dx = pts[a].x - pts[b].x;
+        const dy = pts[a].y - pts[b].y;
+        return dx * dx + dy * dy;
+    };
+
+    const allEdges = new Map();
+    const dropped = new Set();
+
+    for (
+        let t = 0;
+        t < triangles.length;
+        t += 3
+    ) {
+
+        const a = triangles[t];
+        const b = triangles[t + 1];
+        const c = triangles[t + 2];
+
+        const edges = [
+            [a, b],
+            [b, c],
+            [c, a]
+        ];
+
+        let longest = -1;
+        let longestIndex = 0;
+
+        for (let i = 0; i < 3; i++) {
+
+            const key =
+                edgeKey(edges[i][0], edges[i][1]);
+
+            allEdges.set(key, edges[i]);
+
+            const len =
+                lengthSq(edges[i][0], edges[i][1]);
+
+            if (len > longest) {
+                longest = len;
+                longestIndex = i;
+            }
+        }
+
+        dropped.add(
+            edgeKey(
+                edges[longestIndex][0],
+                edges[longestIndex][1]
+            )
+        );
+    }
+
+    const kept = [];
+    const removed = [];
+
+    for (const [key, edge] of allEdges) {
+
+        if (dropped.has(key)) {
+            removed.push(edge);
+        } else {
+            kept.push(edge);
+        }
+    }
+
+    return { kept, removed };
+}
+
+
+// Convenience wrapper: just the surviving edges.
+function computeUrquhartEdges(pts) {
+    return computeUrquhartSplit(pts).kept;
+}
+
+
+// ------------------------------------------------------------
+// Collect the polygon vertices
+// ------------------------------------------------------------
+//
+// The buildings are the CORNERS of the base Voronoi cells, not
+// the generator points. Every corner is a circumcentre where
+// three cells meet, so adjacent cells report the same corner
+// and the raw sweep contains each one roughly three times -
+// hence the dedupe.
+//
+// cellPolygon() returns a closed ring with the first point
+// repeated at the end, so the last entry is skipped.
+// ------------------------------------------------------------
+
+// Snap tolerance for treating two corners as the same point.
+// Shared circumcentres come back bit-identical, but cells
+// clipped against the extent can land a hair apart.
+const VERTEX_SNAP = 100;   // 1/100 px
+
+let buildingPoints = [];
+
+function collectPolygonVertices() {
+
+    buildingPoints = [];
+
+    const generators =
+        getInsideCityPoints();
+
+    if (generators.length < 3) {
+        return buildingPoints;
+    }
+
+    const delaunay =
+        d3.Delaunay.from(
+            generators,
+            d => d.x,
+            d => d.y
+        );
+
+    const voronoi =
+        delaunay.voronoi(
+            getVoronoiExtent()
+        );
+
+    const seen = new Map();
+
+    for (
+        let i = 0;
+        i < generators.length;
+        i++
+    ) {
+
+        const cell =
+            voronoi.cellPolygon(i);
+
+        if (!cell) {
+            continue;
+        }
+
+        // Skip the repeated closing vertex.
+        for (
+            let k = 0;
+            k < cell.length - 1;
+            k++
+        ) {
+
+            const x = cell[k][0];
+            const y = cell[k][1];
+
+            const key =
+                `${Math.round(x * VERTEX_SNAP)},` +
+                `${Math.round(y * VERTEX_SNAP)}`;
+
+            if (!seen.has(key)) {
+                seen.set(key, { x, y });
+            }
+        }
+    }
+
+    let corners = [...seen.values()];
+
+    // Same city + land rules the generators obey.
+    if (cityClosed && boundaryPoints.length >= 3) {
+
+        const polygon =
+            getBoundaryPolygonPoints(200)
+                .map(q => [q.x, q.y]);
+
+        if (polygon.length) {
+
+            corners =
+                corners.filter(p =>
+                    d3.polygonContains(
+                        polygon,
+                        [p.x, p.y]
+                    )
+                );
+        }
+    }
+
+    buildingPoints =
+        corners.filter(p => isLand(p.x, p.y));
+
+    return buildingPoints;
+}
+
+
+// ============================================================
+// ROAD NETWORK
+// ============================================================
+//
+// The Urquhart graph is the skeleton. Three knobs shape it into
+// an actual road network:
+//
+//   1. DEAD-END PRUNING — repeatedly delete degree-1 nodes.
+//      A cul-de-sac is a stretch of road that serves no through
+//      traffic, so every cell along it gets "visited" by the
+//      network without that visit connecting anything. Removing
+//      them is what minimises redundant visits, and because a
+//      leaf removal drops one node AND one edge while leaving
+//      (e - v) unchanged, it RAISES alpha, beta and gamma at
+//      the same time.
+//
+//   2. EXTRA EDGES — Urquhart throws away the longest edge of
+//      every triangle. Adding the shortest of those back, in
+//      increasing length order, creates circuits. Circuits are
+//      exactly what alpha and gamma measure, so this is the
+//      direct lever on connectivity.
+//
+//   3. FACILITY LINKS — spur each facility into the nearest
+//      road nodes. With one link per facility that spur is a
+//      dead-end; with two or more it forms a loop, so the
+//      facility is reachable by more than one route.
+//
+// Connectivity indices (standard transport geography, planar):
+//
+//      v = nodes, e = edges, p = connected components
+//
+//      beta  = e / v                     edges per node
+//      alpha = (e - v + p) / (2v - 5p)   circuits / max circuits
+//      gamma = e / (3(v - 2p))           edges / max planar edges
+//
+// alpha and gamma are both 0..1. A tree scores alpha = 0.
+// ============================================================
+
+let roadNetwork = null;
+
+
+function connectivityIndices(nodeCount, edgeCount, components) {
+
+    const v = nodeCount;
+    const e = edgeCount;
+    const p = Math.max(1, components);
+
+    if (v < 3) {
+        return { v, e, p, alpha: 0, beta: 0, gamma: 0 };
+    }
+
+    const alphaDen = 2 * v - 5 * p;
+    const gammaDen = 3 * (v - 2 * p);
+
+    return {
+        v,
+        e,
+        p,
+        beta: e / v,
+        alpha: alphaDen > 0
+            ? Math.max(0, (e - v + p) / alphaDen)
+            : 0,
+        gamma: gammaDen > 0
+            ? Math.max(0, e / gammaDen)
+            : 0
+    };
+}
+
+
+function countComponents(nodeCount, edges) {
+
+    const adj = Array.from({ length: nodeCount }, () => []);
+
+    for (const [a, b] of edges) {
+        adj[a].push(b);
+        adj[b].push(a);
+    }
+
+    const seen = new Array(nodeCount).fill(false);
+
+    let components = 0;
+
+    for (let i = 0; i < nodeCount; i++) {
+
+        if (seen[i]) {
+            continue;
+        }
+
+        components++;
+
+        const stack = [i];
+        seen[i] = true;
+
+        while (stack.length) {
+
+            const v = stack.pop();
+
+            for (const w of adj[v]) {
+                if (!seen[w]) {
+                    seen[w] = true;
+                    stack.push(w);
+                }
+            }
+        }
+    }
+
+    return components;
+}
+
+
+// ------------------------------------------------------------
+// 1. Dead-end pruning
+// ------------------------------------------------------------
+//
+// Iterative, because removing one leaf can expose another: a
+// chain of cul-de-sac segments unwinds one node at a time.
+// Returns the surviving node indices and the rewritten edges.
+
+function pruneDeadEnds(nodes, edges) {
+
+    const alive = new Array(nodes.length).fill(true);
+
+    const degree = new Array(nodes.length).fill(0);
+
+    const live = edges.map(() => true);
+
+    const incident =
+        Array.from({ length: nodes.length }, () => []);
+
+    edges.forEach(([a, b], i) => {
+        degree[a]++;
+        degree[b]++;
+        incident[a].push(i);
+        incident[b].push(i);
+    });
+
+    const queue = [];
+
+    for (let i = 0; i < nodes.length; i++) {
+        if (degree[i] === 1) {
+            queue.push(i);
+        }
+    }
+
+    let removed = 0;
+
+    while (queue.length) {
+
+        const v = queue.pop();
+
+        if (!alive[v] || degree[v] !== 1) {
+            continue;
+        }
+
+        alive[v] = false;
+        removed++;
+
+        for (const ei of incident[v]) {
+
+            if (!live[ei]) {
+                continue;
+            }
+
+            live[ei] = false;
+
+            const [a, b] = edges[ei];
+            const other = a === v ? b : a;
+
+            degree[other]--;
+
+            if (alive[other] && degree[other] === 1) {
+                queue.push(other);
+            }
+        }
+    }
+
+    // Reindex the survivors.
+    const remap = new Array(nodes.length).fill(-1);
+
+    const outNodes = [];
+
+    for (let i = 0; i < nodes.length; i++) {
+        if (alive[i]) {
+            remap[i] = outNodes.length;
+            outNodes.push(nodes[i]);
+        }
+    }
+
+    const outEdges = [];
+
+    edges.forEach(([a, b], i) => {
+        if (live[i] && remap[a] >= 0 && remap[b] >= 0) {
+            outEdges.push([remap[a], remap[b]]);
+        }
+    });
+
+    return { nodes: outNodes, edges: outEdges, removed };
+}
+
+
+// ------------------------------------------------------------
+// Build the whole thing
+// ------------------------------------------------------------
+
+function buildRoadNetwork() {
+
+    const corners =
+        collectPolygonVertices();
+
+    if (corners.length < 3) {
+        roadNetwork = null;
+        return null;
+    }
+
+    const split =
+        computeUrquhartSplit(corners);
+
+    const lengthOf = (pts, [a, b]) =>
+        Math.hypot(
+            pts[a].x - pts[b].x,
+            pts[a].y - pts[b].y
+        );
+
+    // --------------------------------------------------------
+    // 2. Add back the shortest of the removed edges
+    // --------------------------------------------------------
+
+    const extraPct =
+        Number(extraEdgeSlider.value) / 100;
+
+    const reinstated =
+        split.removed
+            .slice()
+            .sort(
+                (p, q) =>
+                    lengthOf(corners, p) - lengthOf(corners, q)
+            )
+            .slice(
+                0,
+                Math.round(split.removed.length * extraPct)
+            );
+
+    let nodes = corners.map(p => ({
+        x: p.x,
+        y: p.y,
+        kind: "junction"
+    }));
+
+    let edges =
+        split.kept
+            .concat(reinstated)
+            .map(([a, b]) => [a, b]);
+
+    const urquhartEdgeCount = split.kept.length;
+
+    // --------------------------------------------------------
+    // 1. Prune cul-de-sacs
+    // --------------------------------------------------------
+
+    let prunedNodes = 0;
+
+    if (pruneToggle.checked) {
+
+        const pruned = pruneDeadEnds(nodes, edges);
+
+        nodes = pruned.nodes;
+        edges = pruned.edges;
+        prunedNodes = pruned.removed;
+    }
+
+    const roadNodeCount = nodes.length;
+    const roadEdgeCount = edges.length;
+
+    const roadIndices =
+        connectivityIndices(
+            roadNodeCount,
+            roadEdgeCount,
+            countComponents(roadNodeCount, edges)
+        );
+
+    // --------------------------------------------------------
+    // 3. Link the facilities in
+    // --------------------------------------------------------
+
+    const linksEach =
+        Number(facilityLinkSlider.value);
+
+    const facilityEdges = [];
+
+    let linkedFacilities = 0;
+
+    if (
+        linksEach > 0 &&
+        roadNodeCount >= 2
+    ) {
+
+        const finder =
+            d3.Delaunay.from(
+                nodes,
+                d => d.x,
+                d => d.y
+            );
+
+        for (const layer of FACILITY_LAYERS) {
+
+            if (!layer.visible) {
+                continue;
+            }
+
+            for (const facility of layer.points) {
+
+                const index = nodes.length;
+
+                nodes.push({
+                    x: facility.x,
+                    y: facility.y,
+                    kind: "facility",
+                    color: layer.color
+                });
+
+                // Nearest junction, then walk its Delaunay
+                // neighbours outward for the rest, so the
+                // extra links fan out instead of stacking on
+                // one spot.
+                const seed =
+                    finder.find(facility.x, facility.y);
+
+                const candidates = [seed];
+
+                for (const n of finder.neighbors(seed)) {
+                    candidates.push(n);
+                }
+
+                candidates
+                    .slice(0, linksEach)
+                    .forEach(target => {
+                        facilityEdges.push([index, target]);
+                    });
+
+                linkedFacilities++;
+            }
+        }
+    }
+
+    const allEdges =
+        edges.concat(facilityEdges);
+
+    const fullIndices =
+        connectivityIndices(
+            nodes.length,
+            allEdges.length,
+            countComponents(nodes.length, allEdges)
+        );
+
+    let totalLength = 0;
+
+    for (const e of allEdges) {
+        totalLength += lengthOf(nodes, e);
+    }
+
+    roadNetworkDirty = false;
+
+    roadNetwork = {
+        nodes,
+        edges,
+        facilityEdges,
+        allEdges,
+        roadIndices,
+        fullIndices,
+        totalLength,
+        urquhartEdgeCount,
+        reinstated: reinstated.length,
+        removedAvailable: split.removed.length,
+        prunedNodes,
+        linkedFacilities,
+        roadNodeCount
+    };
+
+    return roadNetwork;
+}
+
+
+// ------------------------------------------------------------
+// Draw it
+// ------------------------------------------------------------
+
+function drawUrquhart() {
+
+    urquhartLayer.selectAll("*").remove();
+
+    if (!urquhartToggle.checked) {
+        updateRoadStats();
+        return;
+    }
+
+    // Nothing upstream changed - repaint what we already have,
+    // simplification and all.
+    if (roadNetwork && !roadNetworkDirty) {
+        renderRoadNetwork(roadNetwork);
+        return;
+    }
+
+    const net = buildRoadNetwork();
+
+    if (!net) {
+        updateRoadStats();
+        return;
+    }
+
+    renderRoadNetwork(net);
+}
+
+
+// Draw whatever edges the network currently holds. Kept apart
+// from buildRoadNetwork() so simplification can redraw its
+// result without regenerating the graph underneath it.
+function renderRoadNetwork(net) {
+
+    urquhartLayer.selectAll("*").remove();
+
+    const group =
+        urquhartLayer.append("g");
+
+    if (cityClosed) {
+        group.attr("clip-path", "url(#cityClip)");
+    }
+
+    // One path for the road network - thousands of separate
+    // <line> elements would crawl at city scale.
+    let d = "";
+
+    for (const [a, b] of net.edges) {
+        d +=
+            `M${net.nodes[a].x},${net.nodes[a].y}` +
+            `L${net.nodes[b].x},${net.nodes[b].y}`;
+    }
+
+    if (d) {
+        group
+            .append("path")
+            .attr("class", "urquhart-edge")
+            .attr("d", d);
+    }
+
+    // Facility spurs, in each facility's own colour.
+    if (net.facilityEdges.length) {
+
+        const byColor = new Map();
+
+        for (const [a, b] of net.facilityEdges) {
+
+            const color =
+                net.nodes[a].color ||
+                net.nodes[b].color ||
+                "#ffffff";
+
+            byColor.set(
+                color,
+                (byColor.get(color) || "") +
+                `M${net.nodes[a].x},${net.nodes[a].y}` +
+                `L${net.nodes[b].x},${net.nodes[b].y}`
+            );
+        }
+
+        for (const [color, path] of byColor) {
+            group
+                .append("path")
+                .attr("class", "facility-link")
+                .attr("stroke", color)
+                .attr("d", path);
+        }
+    }
+
+    // Ordinary graph nodes.
+    const radius =
+        Math.max(1.2, 2.5 / zoomScale);
+
+    group
+        .selectAll("circle.building-point")
+        .data(net.nodes.slice(0, net.roadNodeCount))
+        .join("circle")
+        .attr("class", "building-point")
+        .attr("cx", p => p.x)
+        .attr("cy", p => p.y)
+        .attr("r", radius);
+
+    // Selected road junctions, drawn larger and on top.
+    if (net.junctions && junctionToggle.checked) {
+
+        const jr =
+            Math.max(2.6, 5 / zoomScale);
+
+        group
+            .selectAll("circle.road-junction")
+            .data(
+                net.junctions.junctions
+                    .filter(i => i < net.nodes.length)
+                    .map(i => net.nodes[i])
+            )
+            .join("circle")
+            .attr("class", "road-junction")
+            .attr("cx", p => p.x)
+            .attr("cy", p => p.y)
+            .attr("r", jr);
+    }
+
+    updateRoadStats();
+}
+
+
+// ------------------------------------------------------------
+// Stats readout
+// ------------------------------------------------------------
+
+function updateRoadStats() {
+
+    if (!roadStats) {
+        return;
+    }
+
+    if (!urquhartToggle.checked) {
+        roadStats.textContent =
+            "Enable the Building Network layer to measure.";
+        return;
+    }
+
+    const net = roadNetwork;
+
+    if (!net) {
+        roadStats.textContent =
+            "Close a city boundary first.";
+        return;
+    }
+
+    const r = net.roadIndices;
+    const f = net.fullIndices;
+
+    roadStats.textContent =
+        `Roads  α ${r.alpha.toFixed(3)}  ` +
+        `β ${r.beta.toFixed(3)}  γ ${r.gamma.toFixed(3)}\n` +
+        `${r.v} junctions · ${r.e} edges · ` +
+        `${r.p} component${r.p === 1 ? "" : "s"}\n` +
+        `+ facilities  α ${f.alpha.toFixed(3)}  ` +
+        `β ${f.beta.toFixed(3)}  γ ${f.gamma.toFixed(3)}\n` +
+        `${net.linkedFacilities} linked · ` +
+        `${net.facilityEdges.length} spurs\n` +
+        `Urquhart ${net.urquhartEdgeCount} + ` +
+        `${net.reinstated} reinstated of ` +
+        `${net.removedAvailable}\n` +
+        `${net.prunedNodes} cul-de-sac nodes pruned · ` +
+        `total ${metresLabel(net.totalLength)}` +
+        (net.simplified
+            ? (net.junctions
+                ? `\n${net.junctions.junctions.length} junctions ` +
+                  `(r ${net.junctions.radius}, independent)`
+                : "") +
+              `\nSimplified −${net.simplified.removed} roads` +
+              (net.simplified.attempts
+                  ? ` (attempt ${net.simplified.attempt}/` +
+                    `${net.simplified.attempts})`
+                  : "") + ` · ` +
+              `−${(100 * (1 - net.simplified.costAfter /
+                   net.simplified.costBefore)).toFixed(1)}% length · ` +
+              `min degree ${net.simplified.minDegree}`
+            : "");
+}
+
+
+// Network size, in metres when scale is known.
+function urquhartStats() {
+
+    const net =
+        roadNetwork || buildRoadNetwork();
+
+    if (!net) {
+        return null;
+    }
+
+    return {
+        buildings: net.roadNodeCount,
+        edges: net.edges.length,
+        totalLength: net.totalLength,
+        alpha: net.roadIndices.alpha,
+        beta: net.roadIndices.beta,
+        gamma: net.roadIndices.gamma
+    };
+}
+
+
+// ============================================================
+// PROBABILISTIC ROAD SIMPLIFICATION
+// ============================================================
+//
+// Removes redundant roads one at a time, probabilistically,
+// while never breaking three hard invariants:
+//
+//     for every cell c:  degree(c) >= 1
+//     components(graph) == 1
+//     alpha/beta/gamma stay inside their target ranges
+//
+// A candidate removal is scored by how much it improves the
+// graph (dQ), converted to a probability through a sigmoid, and
+// then sampled - so the algorithm prefers good removals without
+// being deterministic, and two runs give different cities.
+//
+// "Cell" here means a node of the road graph: a junction, or a
+// facility hanging off a spur. Its degree is how many roads
+// meet it, and each incident road arrives from its own side.
+// ============================================================
+
+// Target ranges. A removal that pushes a metric outside its
+// range is rejected outright, which is what stops the process
+// from stripping the network down to a tree.
+// alpha/beta/gamma are no longer constraints. They are computed
+// and reported, but nothing is ever rejected for leaving a
+// range. The only hard rules left are structural:
+//
+//     every cell keeps degree >= 1
+//     the graph stays a single component
+//
+// What decides how far simplification goes is now a direct road
+// budget: keep removing until the requested share of total road
+// length is gone, or nothing else can safely come out.
+//
+// Kept only as the reference band the readout compares against.
+const SPEC_ALPHA_RANGE = [0.20, 0.45];
+const SPEC_BETA_RANGE = [1.30, 1.80];
+const SPEC_GAMMA_RANGE = [0.40, 0.60];
+
+// Redundancy that the quality function SOFTLY prefers to keep.
+// A soft preference, not a floor: it makes removals that gut
+// the network's redundancy less likely, without ever forbidding
+// one. Without some term like this the sigmoid saturates at
+// P = 1 and the process stops being probabilistic at all.
+const ALPHA_REFERENCE = 0.35;
+
+
+// Weight on total road cost. This is the term that drives
+// simplification: every road removed cuts total build length,
+// so Q rises. It has to outweigh the residual centre pull in
+// rangeScore(), or removals score negative and never fire.
+const COST_WEIGHT = 3.0;
+
+// Weight on the road-length penalty in the quality function.
+const LENGTH_LAMBDA = 0.35;
+
+// Weight on the side-diversity reward.
+const DIVERSITY_WEIGHT = 0.15;
+
+// Sigmoid sharpness. With the cost term in place a single
+// removal shifts Q by ~4e-3, so k on the order of 1/|dQ| (a few
+// hundred) is what puts probabilities in a useful spread rather
+// than pinning them all at 0 or 1.
+const DEFAULT_SIGMOID_K = 300;
+
+
+// ------------------------------------------------------------
+// Graph structure
+// ------------------------------------------------------------
+
+function makeRoadGraph(nodes, edgeList) {
+
+    const edges =
+        edgeList.map(([a, b]) => ({
+            a,
+            b,
+            length: Math.hypot(
+                nodes[a].x - nodes[b].x,
+                nodes[a].y - nodes[b].y
+            ),
+            alive: true
+        }));
+
+    const graph = {
+        nodes,
+        edges,
+        adj: Array.from({ length: nodes.length }, () => []),
+        degree: new Array(nodes.length).fill(0),
+        aliveEdges: edges.length,
+        maxLength: 0,
+        totalLength: 0
+    };
+
+    edges.forEach((e, i) => {
+        graph.adj[e.a].push(i);
+        graph.adj[e.b].push(i);
+        graph.degree[e.a]++;
+        graph.degree[e.b]++;
+        graph.maxLength = Math.max(graph.maxLength, e.length);
+        graph.totalLength += e.length;
+    });
+
+    if (graph.maxLength === 0) {
+        graph.maxLength = 1;
+    }
+
+    // Frozen at construction so the cost term measures spend
+    // against the ORIGINAL network, not against itself.
+    graph.baseTotalLength = graph.totalLength || 1;
+
+    return graph;
+}
+
+
+function setEdgeAlive(graph, index, alive) {
+
+    const e = graph.edges[index];
+
+    if (e.alive === alive) {
+        return;
+    }
+
+    e.alive = alive;
+
+    const delta = alive ? 1 : -1;
+
+    graph.degree[e.a] += delta;
+    graph.degree[e.b] += delta;
+
+    graph.aliveEdges += delta;
+    graph.totalLength += delta * e.length;
+}
+
+
+function aliveEdgeList(graph) {
+
+    return graph.edges
+        .filter(e => e.alive)
+        .map(e => [e.a, e.b]);
+}
+
+
+// ------------------------------------------------------------
+// Metrics
+// ------------------------------------------------------------
+
+function calculateAlpha(graph) {
+
+    const v = graph.nodes.length;
+    const e = graph.aliveEdges;
+    const p = countGraphComponents(graph);
+
+    const den = 2 * v - 5 * p;
+
+    return den > 0
+        ? Math.max(0, (e - v + p) / den)
+        : 0;
+}
+
+
+function calculateBeta(graph) {
+
+    return graph.nodes.length > 0
+        ? graph.aliveEdges / graph.nodes.length
+        : 0;
+}
+
+
+function calculateGamma(graph) {
+
+    const v = graph.nodes.length;
+    const p = countGraphComponents(graph);
+
+    const den = 3 * (v - 2 * p);
+
+    return den > 0
+        ? Math.max(0, graph.aliveEdges / den)
+        : 0;
+}
+
+
+// ------------------------------------------------------------
+// Cell queries
+// ------------------------------------------------------------
+
+function getCellDegree(graph, cell) {
+    return graph.degree[cell];
+}
+
+
+function isCellConnected(graph, cell) {
+    return graph.degree[cell] >= 1;
+}
+
+
+function countGraphComponents(graph) {
+
+    const n = graph.nodes.length;
+
+    if (n === 0) {
+        return 0;
+    }
+
+    const seen = new Uint8Array(n);
+
+    let components = 0;
+
+    for (let start = 0; start < n; start++) {
+
+        if (seen[start]) {
+            continue;
+        }
+
+        components++;
+
+        const stack = [start];
+        seen[start] = 1;
+
+        while (stack.length) {
+
+            const v = stack.pop();
+
+            for (const ei of graph.adj[v]) {
+
+                const e = graph.edges[ei];
+
+                if (!e.alive) {
+                    continue;
+                }
+
+                const w = e.a === v ? e.b : e.a;
+
+                if (!seen[w]) {
+                    seen[w] = 1;
+                    stack.push(w);
+                }
+            }
+        }
+    }
+
+    return components;
+}
+
+
+function isGraphConnected(graph) {
+    return countGraphComponents(graph) === 1;
+}
+
+
+// ------------------------------------------------------------
+// Side awareness
+// ------------------------------------------------------------
+//
+// Each road arrives at a cell from some bearing. Two roads
+// leaving the same side are near-duplicates; roads spread
+// around the cell give real route diversity.
+//
+// Diversity = 1 - |mean unit vector of the incident bearings|.
+// Evenly spread roads cancel out (diversity -> 1); roads all
+// pointing the same way reinforce (diversity -> 0).
+
+function sideOfAngle(angle) {
+
+    const deg = (angle * 180 / Math.PI + 360) % 360;
+
+    if (deg >= 45 && deg < 135) {
+        return "SOUTH";
+    }
+
+    if (deg >= 135 && deg < 225) {
+        return "WEST";
+    }
+
+    if (deg >= 225 && deg < 315) {
+        return "NORTH";
+    }
+
+    return "EAST";
+}
+
+
+function cellConnections(graph, cell) {
+
+    const out = [];
+
+    for (const ei of graph.adj[cell]) {
+
+        const e = graph.edges[ei];
+
+        if (!e.alive) {
+            continue;
+        }
+
+        const other = e.a === cell ? e.b : e.a;
+
+        const angle =
+            Math.atan2(
+                graph.nodes[other].y - graph.nodes[cell].y,
+                graph.nodes[other].x - graph.nodes[cell].x
+            );
+
+        out.push({
+            edge: ei,
+            other,
+            angle,
+            side: sideOfAngle(angle),
+            length: e.length
+        });
+    }
+
+    return out;
+}
+
+
+function calculateSideDiversity(graph, cell) {
+
+    const conns = cellConnections(graph, cell);
+
+    if (conns.length < 2) {
+        return 0;
+    }
+
+    let sx = 0;
+    let sy = 0;
+
+    for (const c of conns) {
+        sx += Math.cos(c.angle);
+        sy += Math.sin(c.angle);
+    }
+
+    const resultant =
+        Math.hypot(sx, sy) / conns.length;
+
+    return 1 - resultant;
+}
+
+
+// ------------------------------------------------------------
+// Quality
+// ------------------------------------------------------------
+//
+// Soft redundancy preference: 1.0 at or above the reference
+// alpha, tapering to 0 as the network approaches a tree. No
+// hard edges, so it can never veto a removal - it only makes
+// removals that strip redundancy score a little worse.
+function calculateConnectivityScore(graph) {
+
+    return Math.min(
+        1,
+        calculateAlpha(graph) / ALPHA_REFERENCE
+    );
+}
+
+
+function calculateRoadLengthPenalty(graph, edgeIndex) {
+
+    return graph.edges[edgeIndex].length / graph.maxLength;
+}
+
+
+// Mean normalised road length across the surviving network.
+// Dropping a long road lowers this, which raises quality.
+function meanLengthPenalty(graph) {
+
+    if (graph.aliveEdges === 0) {
+        return 0;
+    }
+
+    return (graph.totalLength / graph.aliveEdges) /
+        graph.maxLength;
+}
+
+
+function averageSideDiversity(graph) {
+
+    let sum = 0;
+    let counted = 0;
+
+    for (let i = 0; i < graph.nodes.length; i++) {
+
+        if (graph.degree[i] >= 2) {
+            sum += calculateSideDiversity(graph, i);
+            counted++;
+        }
+    }
+
+    return counted > 0 ? sum / counted : 0;
+}
+
+
+// Total build cost of the surviving network, 0..1 against the
+// original. Every removal lowers it; removing a LONG road
+// lowers it more.
+function calculateNetworkCost(graph) {
+
+    return graph.totalLength / graph.baseTotalLength;
+}
+
+
+function calculateGraphQuality(graph) {
+
+    return calculateConnectivityScore(graph) +
+        DIVERSITY_WEIGHT * averageSideDiversity(graph) -
+        LENGTH_LAMBDA * meanLengthPenalty(graph) -
+        COST_WEIGHT * calculateNetworkCost(graph);
+}
+
+
+// ------------------------------------------------------------
+// Hard constraints
+// ------------------------------------------------------------
+
+// Populated by simplifyRoadNetwork so a run that removes
+// nothing can say exactly which constraint was binding.
+let removalRejections = {
+    degree: 0,
+    disconnect: 0,
+    accepted: 0
+};
+
+function isValidEdgeRemoval(graph, edgeIndex) {
+
+    const e = graph.edges[edgeIndex];
+
+    if (!e.alive) {
+        return false;
+    }
+
+    // Never strand a cell: its last road is untouchable.
+    if (
+        getCellDegree(graph, e.a) <= 1 ||
+        getCellDegree(graph, e.b) <= 1
+    ) {
+        removalRejections.degree++;
+        return false;
+    }
+
+    // Try it and check the whole graph.
+    setEdgeAlive(graph, edgeIndex, false);
+
+    let valid = true;
+
+    // Every cell still has a road.
+    for (let i = 0; i < graph.nodes.length; i++) {
+        if (!isCellConnected(graph, i)) {
+            valid = false;
+            break;
+        }
+    }
+
+    // Still one piece.
+    if (valid && !isGraphConnected(graph)) {
+        valid = false;
+        removalRejections.disconnect++;
+    }
+
+    // No alpha/beta/gamma gate. The structural rules above are
+    // the only hard constraints; how far the network is allowed
+    // to shrink is decided by the road budget in
+    // simplifyRoadNetwork(), not by a metric range.
+
+    setEdgeAlive(graph, edgeIndex, true);
+
+    if (valid) {
+        removalRejections.accepted++;
+    }
+
+    return valid;
+}
+
+
+// ------------------------------------------------------------
+// Removal probability
+// ------------------------------------------------------------
+
+function calculateRemovalProbability(graph, edgeIndex, k) {
+
+    if (!isValidEdgeRemoval(graph, edgeIndex)) {
+        return 0;
+    }
+
+    const before = calculateGraphQuality(graph);
+
+    setEdgeAlive(graph, edgeIndex, false);
+    const after = calculateGraphQuality(graph);
+    setEdgeAlive(graph, edgeIndex, true);
+
+    const dQ = after - before;
+
+    return 1 / (1 + Math.exp(-(k ?? DEFAULT_SIGMOID_K) * dQ));
+}
+
+
+// ------------------------------------------------------------
+// Act on one cell
+// ------------------------------------------------------------
+
+// ============================================================
+// ROAD JUNCTIONS
+// ============================================================
+//
+// Not every node of the Urquhart graph should be a junction.
+// A junction wants to sit in an OPEN spot that is RINGED by
+// dense building clusters - the corner of a plaza, not a point
+// buried inside a tight block. So each node is scored on two
+// densities:
+//
+//   ownDensity(i)        nodes within `radius` of i
+//   ringDensity(i)       mean ownDensity of i's graph neighbours
+//
+//   score(i) = ringDensity(i) - ownDensity(i)
+//
+// High score = neighbours are crowded, i itself is not. That is
+// exactly "surrounds the dense points while sitting in a
+// sparser area".
+//
+// Selection is then greedy by score with one hard rule: a
+// junction may never be adjacent to another junction. That
+// makes the chosen set independent in the graph, so junctions
+// are always separated by at least one ordinary node and never
+// clump into a chain.
+// ============================================================
+
+function computeLocalDensities(graph, radius) {
+
+    const n = graph.nodes.length;
+    const density = new Float64Array(n);
+    const r2 = radius * radius;
+
+    // Bucket into a grid so this stays linear-ish instead of
+    // comparing every node against every other one.
+    const cell = radius || 1;
+    const buckets = new Map();
+
+    const keyOf = (x, y) =>
+        `${Math.floor(x / cell)},${Math.floor(y / cell)}`;
+
+    graph.nodes.forEach((p, i) => {
+
+        const key = keyOf(p.x, p.y);
+
+        if (!buckets.has(key)) {
+            buckets.set(key, []);
+        }
+
+        buckets.get(key).push(i);
+    });
+
+    for (let i = 0; i < n; i++) {
+
+        const p = graph.nodes[i];
+
+        const gx = Math.floor(p.x / cell);
+        const gy = Math.floor(p.y / cell);
+
+        let count = 0;
+
+        for (let dx = -1; dx <= 1; dx++) {
+
+            for (let dy = -1; dy <= 1; dy++) {
+
+                const list =
+                    buckets.get(`${gx + dx},${gy + dy}`);
+
+                if (!list) {
+                    continue;
+                }
+
+                for (const j of list) {
+
+                    if (j === i) {
+                        continue;
+                    }
+
+                    const q = graph.nodes[j];
+                    const ddx = q.x - p.x;
+                    const ddy = q.y - p.y;
+
+                    if (ddx * ddx + ddy * ddy <= r2) {
+                        count++;
+                    }
+                }
+            }
+        }
+
+        density[i] = count;
+    }
+
+    return density;
+}
+
+
+function graphNeighbours(graph, cell) {
+
+    const out = [];
+
+    for (const ei of graph.adj[cell]) {
+
+        const e = graph.edges[ei];
+
+        if (!e.alive) {
+            continue;
+        }
+
+        out.push(e.a === cell ? e.b : e.a);
+    }
+
+    return out;
+}
+
+
+function selectRoadJunctions(graph, options) {
+
+    const opts = options || {};
+
+    const radius = opts.radius ?? 40;
+    const minDegree = opts.minDegree ?? 2;
+
+    const density =
+        computeLocalDensities(graph, radius);
+
+    const scored = [];
+
+    for (let i = 0; i < graph.nodes.length; i++) {
+
+        if (graph.degree[i] < minDegree) {
+            continue;
+        }
+
+        const nbrs = graphNeighbours(graph, i);
+
+        if (!nbrs.length) {
+            continue;
+        }
+
+        let ring = 0;
+
+        for (const j of nbrs) {
+            ring += density[j];
+        }
+
+        ring /= nbrs.length;
+
+        scored.push({
+            node: i,
+            score: ring - density[i],
+            own: density[i],
+            ring
+        });
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+
+    const isJunction =
+        new Uint8Array(graph.nodes.length);
+
+    const blocked =
+        new Uint8Array(graph.nodes.length);
+
+    const chosen = [];
+
+    for (const candidate of scored) {
+
+        // Hard rule: never adjacent to an existing junction.
+        if (blocked[candidate.node]) {
+            continue;
+        }
+
+        isJunction[candidate.node] = 1;
+        chosen.push(candidate);
+
+        for (const j of graphNeighbours(graph, candidate.node)) {
+            blocked[j] = 1;
+        }
+    }
+
+    return {
+        junctions: chosen.map(c => c.node),
+        isJunction,
+        detail: chosen,
+        density,
+        radius
+    };
+}
+
+
+function shuffleInPlace(array, random) {
+
+    for (let i = array.length - 1; i > 0; i--) {
+
+        const j = Math.floor(random() * (i + 1));
+
+        const t = array[i];
+        array[i] = array[j];
+        array[j] = t;
+    }
+
+    return array;
+}
+
+
+function selectAndRemoveRoad(graph, cell, k, rng) {
+
+    const random = rng || Math.random;
+
+    if (getCellDegree(graph, cell) <= 1) {
+        return -1;
+    }
+
+    // Shuffled, not sorted by length: the length preference is
+    // already inside Q via the road-length penalty, so sorting
+    // here would apply it twice AND make the walk deterministic.
+    // Randomising the order is what makes two runs produce
+    // genuinely different cities.
+    const candidates =
+        shuffleInPlace(cellConnections(graph, cell), random);
+
+    for (const candidate of candidates) {
+
+        const p =
+            calculateRemovalProbability(
+                graph,
+                candidate.edge,
+                k
+            );
+
+        if (p <= 0) {
+            continue;
+        }
+
+        if (random() < p) {
+            setEdgeAlive(graph, candidate.edge, false);
+            return candidate.edge;
+        }
+    }
+
+    return -1;
+}
+
+
+// ------------------------------------------------------------
+// Main loop
+// ------------------------------------------------------------
+
+// ============================================================
+// STEPWISE SIMPLIFICATION
+// ============================================================
+//
+// Same algorithm as simplifyRoadNetwork(), but broken into
+// single steps so it can be driven one frame at a time and
+// watched. simplifyRoadNetwork() stays as the synchronous
+// version used for testing.
+// ============================================================
+
+function createSimplifyRunner(graph, options) {
+
+    const opts = options || {};
+
+    const k = opts.k ?? DEFAULT_SIGMOID_K;
+    const rng = opts.rng || Math.random;
+    const maxPasses = opts.maxPasses ?? 12;
+    const budget = opts.reduction ?? 0.25;
+
+    const junctionSet =
+        opts.junctions ? new Set(opts.junctions) : null;
+
+    let pass = 0;
+    let order = [];
+    let pointer = 0;
+    let removedThisPass = 0;
+    let removed = 0;
+    let done = false;
+
+    function beginPass() {
+
+        order =
+            shuffleInPlace(
+                graph.nodes
+                    .map((_, i) => i)
+                    .filter(i => graph.degree[i] >= 2),
+                rng
+            )
+                .sort((a, b) => graph.degree[b] - graph.degree[a])
+                .filter(i => !junctionSet || junctionSet.has(i));
+
+        pointer = 0;
+        removedThisPass = 0;
+        pass++;
+    }
+
+    function finish() {
+        removed += removedThisPass;
+        removedThisPass = 0;
+        done = true;
+    }
+
+    beginPass();
+
+    return {
+
+        get removed() {
+            return removed + removedThisPass;
+        },
+
+        get pass() {
+            return pass;
+        },
+
+        get done() {
+            return done;
+        },
+
+        // One unit of work. Returns true while there is more.
+        step() {
+
+            if (done) {
+                return false;
+            }
+
+            if (calculateNetworkCost(graph) <= 1 - budget) {
+                finish();
+                return false;
+            }
+
+            if (pointer >= order.length) {
+
+                removed += removedThisPass;
+
+                const stalled = removedThisPass === 0;
+
+                if (stalled || pass >= maxPasses) {
+                    removedThisPass = 0;
+                    done = true;
+                    return false;
+                }
+
+                beginPass();
+                return true;
+            }
+
+            const cell = order[pointer++];
+
+            if (selectAndRemoveRoad(graph, cell, k, rng) >= 0) {
+                removedThisPass++;
+            }
+
+            return true;
+        }
+    };
+}
+
+
+function simplifyRoadNetwork(graph, options) {
+
+    const opts = options || {};
+
+    const k = opts.k ?? DEFAULT_SIGMOID_K;
+    const rng = opts.rng || Math.random;
+    const maxPasses = opts.maxPasses ?? 12;
+
+    // Stop once this much of the original road length is gone.
+    const budget = opts.reduction ?? 0.25;
+
+    // When junctionsOnly is set, roads are only pruned AT the
+    // selected junctions. Everywhere else the network is left
+    // alone, so simplification is concentrated where the
+    // junction test said the redundancy actually is.
+    const junctionSet =
+        opts.junctions
+            ? new Set(opts.junctions)
+            : null;
+
+    removalRejections = {
+        degree: 0,
+        disconnect: 0,
+        accepted: 0
+    };
+
+    const startCost = calculateNetworkCost(graph);
+
+    let removed = 0;
+    let passes = 0;
+
+    for (let pass = 0; pass < maxPasses; pass++) {
+
+        passes++;
+
+        // Most-connected cells first: they hold the most
+        // redundancy, so that is where simplification pays.
+        // Most-connected first, but shuffled within each degree
+        // so the sweep order itself is not a hidden bias.
+        const order =
+            shuffleInPlace(
+                graph.nodes
+                    .map((_, i) => i)
+                    .filter(i => graph.degree[i] >= 2),
+                rng
+            ).sort(
+                (a, b) => graph.degree[b] - graph.degree[a]
+            ).filter(
+                i => !junctionSet || junctionSet.has(i)
+            );
+
+        let removedThisPass = 0;
+
+        for (const cell of order) {
+
+            // Budget spent - stop, even mid-pass.
+            if (calculateNetworkCost(graph) <= 1 - budget) {
+                break;
+            }
+
+            if (selectAndRemoveRoad(graph, cell, k, rng) >= 0) {
+                removedThisPass++;
+            }
+        }
+
+        // Bank this pass's removals BEFORE testing the budget.
+        // Breaking first would discard them from the count, so a
+        // run that met its budget on pass one reported "removed:
+        // 0" while having actually deleted the roads.
+        removed += removedThisPass;
+
+        if (calculateNetworkCost(graph) <= 1 - budget) {
+            break;
+        }
+
+        // Nothing left that is both safe and worth doing.
+        if (removedThisPass === 0) {
+            break;
+        }
+    }
+
+    return {
+        removed,
+        passes,
+        rejections: { ...removalRejections },
+        costBefore: startCost,
+        costAfter: calculateNetworkCost(graph),
+        budget,
+        budgetMet: calculateNetworkCost(graph) <= 1 - budget,
+        alpha: calculateAlpha(graph),
+        beta: calculateBeta(graph),
+        gamma: calculateGamma(graph),
+        components: countGraphComponents(graph),
+        minDegree: Math.min(...graph.degree),
+        edges: graph.aliveEdges,
+        nodes: graph.nodes.length,
+        totalLength: graph.totalLength,
+        sideDiversity: averageSideDiversity(graph)
+    };
+}
+
+
+// ------------------------------------------------------------
+// Hook into the app
+// ------------------------------------------------------------
+
+// ============================================================
+// ROAD STRAIGHTENING
+// ============================================================
+//
+// A final relaxation over the finished network. Nodes where
+// exactly two roads meet are mid-chain: they are not junctions,
+// just kinks left over from the Voronoi corners the network was
+// built from. Each one is nudged toward the midpoint of its two
+// neighbours.
+//
+// Repeated gently, this makes every chain converge on the
+// straight line between the junctions that anchor its ends -
+// so the segments along a chain drift toward a shared slope
+// instead of zig-zagging. Junctions themselves never move, so
+// the network's topology, its degrees and its connectivity are
+// all untouched; only the geometry relaxes.
+//
+// The pull is a fraction per iteration, so the change is
+// gradual rather than snapping straight.
+// ============================================================
+
+function straightenRoadChains(net, strength, anchors) {
+
+    if (!net || !net.edges.length) {
+        return 0;
+    }
+
+    const nodes = net.nodes;
+
+    // Adjacency over ROAD edges only. Facility spurs are
+    // excluded so a spur doesn't drag a chain sideways.
+    const neighbours =
+        Array.from({ length: nodes.length }, () => []);
+
+    for (const [a, b] of net.edges) {
+        neighbours[a].push(b);
+        neighbours[b].push(a);
+    }
+
+    const fixed = anchors || new Set();
+
+    let moved = 0;
+
+    // Read from a snapshot so every node in this iteration sees
+    // the same geometry - otherwise the sweep order biases which
+    // way the chain drifts.
+    const snapshot =
+        nodes.map(p => ({ x: p.x, y: p.y }));
+
+    for (let i = 0; i < nodes.length; i++) {
+
+        // Only mid-chain nodes. Degree 1 is a dead end, degree
+        // 3+ is a real junction: both stay put.
+        if (neighbours[i].length !== 2) {
+            continue;
+        }
+
+        if (fixed.has(i)) {
+            continue;
+        }
+
+        const a = snapshot[neighbours[i][0]];
+        const b = snapshot[neighbours[i][1]];
+
+        const targetX = (a.x + b.x) / 2;
+        const targetY = (a.y + b.y) / 2;
+
+        const nextX =
+            snapshot[i].x + (targetX - snapshot[i].x) * strength;
+
+        const nextY =
+            snapshot[i].y + (targetY - snapshot[i].y) * strength;
+
+        // Roads may not wander into the sea.
+        if (!isLand(nextX, nextY)) {
+            continue;
+        }
+
+        nodes[i].x = nextX;
+        nodes[i].y = nextY;
+
+        moved++;
+    }
+
+    return moved;
+}
+
+
+// How far a chain still deviates from straight: mean distance
+// from each mid-chain node to the line through its neighbours.
+// Falls toward zero as the chains align.
+function chainDeviation(net) {
+
+    if (!net || !net.edges.length) {
+        return 0;
+    }
+
+    const nodes = net.nodes;
+
+    const neighbours =
+        Array.from({ length: nodes.length }, () => []);
+
+    for (const [a, b] of net.edges) {
+        neighbours[a].push(b);
+        neighbours[b].push(a);
+    }
+
+    let sum = 0;
+    let count = 0;
+
+    for (let i = 0; i < nodes.length; i++) {
+
+        if (neighbours[i].length !== 2) {
+            continue;
+        }
+
+        const p = nodes[i];
+        const a = nodes[neighbours[i][0]];
+        const b = nodes[neighbours[i][1]];
+
+        sum += Math.hypot(
+            p.x - (a.x + b.x) / 2,
+            p.y - (a.y + b.y) / 2
+        );
+
+        count++;
+    }
+
+    return count ? sum / count : 0;
+}
+
+
+// ============================================================
+// ANIMATED SIMPLIFICATION WITH CHAMPION SELECTION
+// ============================================================
+//
+// Runs several independent attempts. Each attempt starts from
+// the SAME untouched network and prunes it with fresh random
+// draws, so no two attempts follow the same path. After each
+// one the result is scored, and the best network so far is
+// kept as the champion. A later attempt replaces it only if it
+// scores higher.
+//
+// Because every attempt spends the same road budget, the
+// scores differ almost entirely in what was KEPT - redundancy
+// and side diversity - so the champion is the layout that
+// preserved the most useful structure for the same spend.
+//
+// Work is spread across frames so the roads visibly disappear
+// rather than snapping to the answer.
+// ============================================================
+
+let simplifyRun = null;
+
+
+function stopSimplification() {
+
+    if (simplifyRun) {
+        simplifyRun.cancelled = true;
+    }
+}
+
+
+function runRoadSimplification() {
+
+    // Second press while running = stop.
+    if (simplifyRun && !simplifyRun.cancelled) {
+        stopSimplification();
+        return;
+    }
+
+    if (!urquhartToggle.checked) {
+        status.textContent =
+            "Enable the Building Network layer first.";
+        return;
+    }
+
+    const base = buildRoadNetwork();
+
+    if (!base) {
+        status.textContent =
+            "Close a city boundary first.";
+        return;
+    }
+
+    const baseEdges =
+        base.allEdges.map(([a, b]) => [a, b]);
+
+    const nodes = base.nodes;
+
+    const reduction =
+        Number(reductionSlider.value) / 100;
+
+    const k =
+        Number(simplifyKSlider.value);
+
+    const attempts =
+        Number(attemptsSlider.value);
+
+    const speed =
+        Number(speedSlider.value);
+
+    const useJunctions =
+        junctionToggle.checked;
+
+    // Junctions are chosen once, from the untouched network, so
+    // every attempt prunes at the same places.
+    const scratch =
+        makeRoadGraph(nodes, baseEdges);
+
+    const picked =
+        selectRoadJunctions(scratch, {
+            radius: Number(junctionRadiusSlider.value)
+        });
+
+    base.junctions = picked;
+
+    logStep(
+        `Junctions: ${picked.junctions.length} selected ` +
+        `(radius ${picked.radius}, none adjacent).`
+    );
+
+    simplifyBtn.textContent = "Stop";
+
+    const run = {
+        cancelled: false,
+        attempt: 0,
+        graph: null,
+        runner: null,
+        champion: null,
+        startEdges: baseEdges.length
+    };
+
+    simplifyRun = run;
+
+
+    function beginAttempt() {
+
+        run.attempt++;
+
+        run.graph = makeRoadGraph(nodes, baseEdges);
+
+        run.runner =
+            createSimplifyRunner(run.graph, {
+                k,
+                reduction,
+                junctions: useJunctions ? picked.junctions : null
+            });
+    }
+
+
+    function scoreAttempt(graph) {
+
+        return {
+            quality: calculateGraphQuality(graph),
+            alive: graph.edges.map(e => e.alive),
+            removed: run.runner.removed,
+            edges: graph.aliveEdges,
+            alpha: calculateAlpha(graph),
+            beta: calculateBeta(graph),
+            gamma: calculateGamma(graph),
+            components: countGraphComponents(graph),
+            minDegree: Math.min(...graph.degree),
+            totalLength: graph.totalLength,
+            cost: calculateNetworkCost(graph),
+            diversity: averageSideDiversity(graph)
+        };
+    }
+
+
+    // Paint whatever the working graph currently holds.
+    function paint(graph) {
+
+        const kept =
+            graph.edges
+                .filter(e => e.alive)
+                .map(e => [e.a, e.b]);
+
+        const facilitySet = new Set(
+            base.facilityEdges.map(([a, b]) => `${a},${b}`)
+        );
+
+        base.allEdges = kept;
+
+        base.edges =
+            kept.filter(([a, b]) => !facilitySet.has(`${a},${b}`));
+
+        renderRoadNetwork(base);
+    }
+
+
+    function applyChampion() {
+
+        const champ = run.champion;
+
+        const kept = [];
+
+        baseEdges.forEach(([a, b], i) => {
+            if (champ.alive[i]) {
+                kept.push([a, b]);
+            }
+        });
+
+        const facilitySet = new Set(
+            base.facilityEdges.map(([a, b]) => `${a},${b}`)
+        );
+
+        base.allEdges = kept;
+
+        base.edges =
+            kept.filter(([a, b]) => !facilitySet.has(`${a},${b}`));
+
+        base.facilityEdges =
+            kept.filter(([a, b]) => facilitySet.has(`${a},${b}`));
+
+        base.roadIndices =
+            connectivityIndices(
+                base.roadNodeCount,
+                base.edges.length,
+                countComponents(base.roadNodeCount, base.edges)
+            );
+
+        base.fullIndices =
+            connectivityIndices(
+                nodes.length,
+                kept.length,
+                champ.components
+            );
+
+        base.totalLength = champ.totalLength;
+
+        base.simplified = {
+            removed: champ.removed,
+            edges: champ.edges,
+            alpha: champ.alpha,
+            beta: champ.beta,
+            gamma: champ.gamma,
+            components: champ.components,
+            minDegree: champ.minDegree,
+            sideDiversity: champ.diversity,
+            costBefore: 1,
+            costAfter: champ.cost,
+            attempt: champ.attempt,
+            attempts: run.attempt
+        };
+
+        renderRoadNetwork(base);
+    }
+
+
+    function finishAll() {
+
+        if (!run.champion) {
+
+            simplifyRun = null;
+            simplifyBtn.textContent = "Simplify Network";
+
+            paint(makeRoadGraph(nodes, baseEdges));
+
+            status.textContent =
+                "Nothing could be removed — every road is either " +
+                "a cell's only link or a bridge.";
+
+            logStep("Simplification removed nothing.");
+
+            return;
+        }
+
+        applyChampion();
+
+        // Final relaxation: straighten the chains, animated.
+        const straightenIterations =
+            Number(straightenSlider.value);
+
+        if (straightenIterations > 0) {
+            beginStraightening(straightenIterations);
+            return;
+        }
+
+        report();
+    }
+
+
+    function beginStraightening(iterations) {
+
+        const anchors =
+            new Set(picked.junctions);
+
+        const before = chainDeviation(base);
+
+        let i = 0;
+
+        function tick() {
+
+            if (run.cancelled || i >= iterations) {
+
+                logStep(
+                    `Straightening: chain deviation ` +
+                    `${before.toFixed(2)} → ` +
+                    `${chainDeviation(base).toFixed(2)} px ` +
+                    `over ${i} iterations.`
+                );
+
+                report();
+                return;
+            }
+
+            straightenRoadChains(base, 0.25, anchors);
+
+            i++;
+
+            renderRoadNetwork(base);
+
+            status.textContent =
+                `Straightening roads ${i}/${iterations}...`;
+
+            requestAnimationFrame(tick);
+        }
+
+        requestAnimationFrame(tick);
+    }
+
+
+    function report() {
+
+        simplifyRun = null;
+        simplifyBtn.textContent = "Simplify Network";
+
+        const c = run.champion;
+
+        const savedPct = 100 * (1 - c.cost);
+
+        status.textContent =
+            `Best of ${run.attempt}: −${c.removed} roads ` +
+            `(−${savedPct.toFixed(1)}% length) · ` +
+            `α ${c.alpha.toFixed(3)} · β ${c.beta.toFixed(3)} · ` +
+            `γ ${c.gamma.toFixed(3)}`;
+
+        logStep(
+            `Simplification done — attempt ${c.attempt} of ` +
+            `${run.attempt} won. ${run.startEdges} → ${c.edges} ` +
+            `edges (−${savedPct.toFixed(1)}% length), ` +
+            `α ${c.alpha.toFixed(3)}, diversity ` +
+            `${c.diversity.toFixed(3)}, min degree ${c.minDegree}, ` +
+            `${c.components} component${c.components === 1 ? "" : "s"}.`
+        );
+    }
+
+
+    function frame() {
+
+        if (run.cancelled) {
+            finishAll();
+            return;
+        }
+
+        // Advance the current attempt a little.
+        for (let i = 0; i < speed; i++) {
+
+            if (!run.runner.step()) {
+                break;
+            }
+        }
+
+        paint(run.graph);
+
+        status.textContent =
+            `Attempt ${run.attempt}/${attempts} · ` +
+            `−${run.runner.removed} roads` +
+            (run.champion
+                ? ` · best so far ${run.champion.quality.toFixed(4)} ` +
+                  `(attempt ${run.champion.attempt})`
+                : "");
+
+        if (run.runner.done) {
+
+            const result = scoreAttempt(run.graph);
+
+            result.attempt = run.attempt;
+
+            // Keep it only if it beats the incumbent.
+            const better =
+                !run.champion ||
+                result.quality > run.champion.quality;
+
+            if (better) {
+
+                run.champion = result;
+
+                logStep(
+                    `Attempt ${run.attempt}: quality ` +
+                    `${result.quality.toFixed(4)} — new best ` +
+                    `(−${result.removed} roads, α ` +
+                    `${result.alpha.toFixed(3)}).`
+                );
+
+            } else {
+
+                logStep(
+                    `Attempt ${run.attempt}: quality ` +
+                    `${result.quality.toFixed(4)} — kept ` +
+                    `attempt ${run.champion.attempt} instead.`
+                );
+            }
+
+            if (run.attempt >= attempts) {
+                finishAll();
+                return;
+            }
+
+            beginAttempt();
+        }
+
+        requestAnimationFrame(frame);
+    }
+
+    beginAttempt();
+    requestAnimationFrame(frame);
+}
+
+
+// ============================================================
 // DRAW VORONOI
 // ============================================================
 
@@ -2164,8 +4611,11 @@ function relaxPoints() {
             );
     }
 
+    invalidateRoadNetwork();
+
     drawPoints();
     drawVoronoi();
+    drawUrquhart();
 }
 
 
@@ -2233,10 +4683,9 @@ function stopRelaxation() {
 // PLACE FACILITIES
 // ============================================================
 //
-// Runs Poisson-disc sampling a second time with a much larger
-// radius, restricted to the city's bounding box, then keeps
-// only the samples that land inside the city boundary. Each
-// surviving sample becomes one essential facility.
+// Each of the three layers gets its own Poisson-disc pass at
+// its own spacing, then the same city + land filtering the
+// block layer uses.
 // ============================================================
 
 function placeFacilities() {
@@ -2248,75 +4697,101 @@ function placeFacilities() {
     const extent =
         getVoronoiExtent();
 
-    const boxWidth =
-        extent[2] - extent[0];
-
-    const boxHeight =
-        extent[3] - extent[1];
-
-    const facilityR =
-        Number(facilityRSlider.value);
-
-    // Sample within the city's bounding box, then shift the
-    // results back into world coordinates.
-    const raw =
-        poissonDiscSampling(
-            boxWidth,
-            boxHeight,
-            facilityR,
-            K
-        );
+    const boxWidth = extent[2] - extent[0];
+    const boxHeight = extent[3] - extent[1];
 
     const cityPolygon =
         getBoundaryPolygonPoints(200)
             .map(q => [q.x, q.y]);
 
-    const candidates =
-        raw.map(p => ({
-            x: p.x + extent[0],
-            y: p.y + extent[1]
-        }));
+    const summary = [];
 
-    const inCity =
-        candidates.filter(p =>
-            d3.polygonContains(
-                cityPolygon,
-                [p.x, p.y]
-            )
+    for (const layer of FACILITY_LAYERS) {
+
+        const raw =
+            poissonDiscSampling(
+                boxWidth,
+                boxHeight,
+                layer.spacing,
+                K
+            );
+
+        const inCity =
+            raw
+                .map(p => ({
+                    x: p.x + extent[0],
+                    y: p.y + extent[1]
+                }))
+                .filter(p =>
+                    d3.polygonContains(
+                        cityPolygon,
+                        [p.x, p.y]
+                    )
+                );
+
+        // A facility can no more sit in the ocean than a block.
+        layer.points =
+            inCity.filter(p => isLand(p.x, p.y));
+
+        layer.drowned =
+            inCity.length - layer.points.length;
+
+        layer.stepScale = 1;
+
+        summary.push(
+            `${layer.label} ${layer.points.length}`
         );
+    }
 
-    // A facility can no more sit in the ocean than a block can.
-    facilityPoints =
-        inCity.filter(p => isLand(p.x, p.y));
-
-    const drowned =
-        inCity.length - facilityPoints.length;
-
-    facilityStepScale = 1;
+    invalidateRoadNetwork();
 
     drawFacilities();
 
     evaluateMetric();
 
+    const totalDrowned =
+        FACILITY_LAYERS.reduce(
+            (n, l) => n + (l.drowned || 0),
+            0
+        );
+
     logStep(
-        `Placed ${facilityPoints.length} facilities ` +
-        `(spacing ${facilityR})` +
-        (drowned > 0
-            ? `; rejected ${drowned} below ${seaLevelM} m.`
+        `Placed facilities — ${summary.join(", ")}` +
+        (totalDrowned > 0
+            ? `; rejected ${totalDrowned} below ${seaLevelM} m.`
             : ".")
     );
 
     status.textContent =
-        `${facilityPoints.length} facilities placed. ` +
-        `Run epochs to optimize their positions.`;
+        `${totalFacilityCount()} facilities placed across ` +
+        `${FACILITY_LAYERS.length} layers. Run epochs to optimize.`;
 
     optimizeBtn.disabled =
-        facilityPoints.length < 2;
+        !FACILITY_LAYERS.some(l => l.points.length >= 2);
+}
+
+
+function totalFacilityCount() {
+
+    return FACILITY_LAYERS.reduce(
+        (n, l) => n + l.points.length,
+        0
+    );
 }
 
 
 // ============================================================
 // DRAW FACILITIES
+// ============================================================
+//
+// Per layer, in its own colour:
+//   - Voronoi cells   = that layer's service areas
+//   - Delaunay edges  = the adjacency graph dual to those
+//                       cells, i.e. which facilities are
+//                       neighbours. This is the graph the
+//                       load-balancing force runs along, and
+//                       the natural road network for the
+//                       decongestion work.
 // ============================================================
 
 function drawFacilities() {
@@ -2324,90 +4799,103 @@ function drawFacilities() {
     facilityVoronoiLayer.selectAll("*").remove();
     facilityPointLayer.selectAll("*").remove();
 
-    if (!facilityToggle.checked) {
-        return;
-    }
+    for (const layer of FACILITY_LAYERS) {
 
-    if (!facilityPoints.length) {
-        return;
-    }
-
-    // --------------------------------------------------------
-    // Facility service areas (the "bigger" Voronoi diagram),
-    // drawn in red and overlaid on the block-level diagram.
-    // --------------------------------------------------------
-
-    if (facilityPoints.length >= 2) {
-
-        const delaunay =
-            d3.Delaunay.from(
-                facilityPoints,
-                d => d.x,
-                d => d.y
-            );
-
-        const voronoi =
-            delaunay.voronoi(
-                getVoronoiExtent()
-            );
+        if (!layer.visible || !layer.points.length) {
+            continue;
+        }
 
         const group =
             facilityVoronoiLayer
-                .append("g");
+                .append("g")
+                .attr("data-layer", layer.key);
 
         if (cityClosed) {
-
-            group.attr(
-                "clip-path",
-                "url(#cityClip)"
-            );
+            group.attr("clip-path", "url(#cityClip)");
         }
 
-        for (
-            let i = 0;
-            i < facilityPoints.length;
-            i++
-        ) {
+        if (layer.points.length >= 2) {
 
-            const cell =
-                voronoi.cellPolygon(i);
+            const delaunay =
+                d3.Delaunay.from(
+                    layer.points,
+                    d => d.x,
+                    d => d.y
+                );
 
-            if (!cell) {
-                continue;
+            // ------------------------------------------------
+            // Delaunay triangulation
+            // ------------------------------------------------
+
+            if (layer.showDelaunay) {
+
+                group
+                    .append("path")
+                    .attr("class", "facility-delaunay")
+                    .attr("stroke", layer.color)
+                    .attr("d", delaunay.render());
             }
 
-            group
-                .append("path")
-                .attr(
-                    "class",
-                    "facility-cell"
-                )
-                .attr(
-                    "d",
-                    "M" +
-                    cell
-                        .map(p => `${p[0]},${p[1]}`)
-                        .join("L") +
-                    "Z"
-                );
+            // ------------------------------------------------
+            // Voronoi service areas
+            // ------------------------------------------------
+
+            if (layer.showCells) {
+
+                const voronoi =
+                    delaunay.voronoi(
+                        getVoronoiExtent()
+                    );
+
+                for (
+                    let i = 0;
+                    i < layer.points.length;
+                    i++
+                ) {
+
+                    const cell =
+                        voronoi.cellPolygon(i);
+
+                    if (!cell) {
+                        continue;
+                    }
+
+                    group
+                        .append("path")
+                        .attr("class", "facility-cell")
+                        .attr("stroke", layer.color)
+                        .attr("fill", layer.fill)
+                        .attr(
+                            "d",
+                            "M" +
+                            cell
+                                .map(p => `${p[0]},${p[1]}`)
+                                .join("L") +
+                            "Z"
+                        );
+                }
+            }
         }
+
+        // ----------------------------------------------------
+        // Facility markers
+        // ----------------------------------------------------
+
+        const radius =
+            Math.max(3, 6 / zoomScale);
+
+        facilityPointLayer
+            .append("g")
+            .attr("data-layer", layer.key)
+            .selectAll("circle")
+            .data(layer.points)
+            .join("circle")
+            .attr("class", "facility-point")
+            .attr("fill", layer.color)
+            .attr("cx", d => d.x)
+            .attr("cy", d => d.y)
+            .attr("r", radius);
     }
-
-    // --------------------------------------------------------
-    // Facility markers
-    // --------------------------------------------------------
-
-    const radius =
-        Math.max(3, 6 / zoomScale);
-
-    facilityPointLayer
-        .selectAll("circle")
-        .data(facilityPoints)
-        .join("circle")
-        .attr("class", "facility-point")
-        .attr("cx", d => d.x)
-        .attr("cy", d => d.y)
-        .attr("r", radius);
 }
 
 
@@ -2415,27 +4903,27 @@ function drawFacilities() {
 // ASSIGN BLOCK POINTS TO FACILITIES
 // ============================================================
 //
-// Every block point belongs to whichever facility is nearest -
-// which is exactly the facility Voronoi cell it falls inside.
-// delaunay.find() gives that nearest index directly, so this
-// avoids any point-in-polygon work.
+// Every block point belongs to whichever facility of this layer
+// is nearest - which is exactly the Voronoi cell it falls in.
+// delaunay.find() gives that index directly, so this avoids any
+// point-in-polygon work.
 // ============================================================
 
-function assignBlocksToFacilities() {
+function assignBlocksToFacilities(layerPoints) {
 
     const blocks =
         getInsideCityPoints();
 
     const buckets =
-        facilityPoints.map(() => []);
+        layerPoints.map(() => []);
 
-    if (!facilityPoints.length || !blocks.length) {
+    if (!layerPoints.length || !blocks.length) {
         return { blocks, buckets };
     }
 
     const delaunay =
         d3.Delaunay.from(
-            facilityPoints,
+            layerPoints,
             d => d.x,
             d => d.y
         );
@@ -2490,8 +4978,7 @@ function maxPairwiseDistance(cellPoints) {
             const dx = hull[i][0] - hull[j][0];
             const dy = hull[i][1] - hull[j][1];
 
-            const dist =
-                Math.hypot(dx, dy);
+            const dist = Math.hypot(dx, dy);
 
             if (dist > best) {
                 best = dist;
@@ -2507,68 +4994,54 @@ function maxPairwiseDistance(cellPoints) {
 // METRIC
 // ============================================================
 //
-// Two things are measured per facility cell:
+// Measured per facility cell, per layer:
 //
-//   load   - how many block points (smaller polygons) fall
-//            inside this facility's larger polygon
-//   spread - the max distance between any two of those points,
-//            i.e. how far apart the extremes of the service
-//            area are
+//   load   - how many block points fall inside this facility's
+//            service area
+//   spread - the max distance between any two of those points
 //
-// A good city plan wants BOTH:
-//   - loads even across facilities, so no single hospital is
-//     serving triple the blocks of its neighbour
-//   - spreads small, so nowhere in a service area is far from
-//     its facility
+// A good plan wants loads even across facilities and spreads
+// small. Each becomes a 0..1 sub-score:
 //
-// Each is turned into a 0..1 sub-score and blended into one
-// number that goes up as the plan gets better.
+//   loadScore   = 1 / (1 + CV(loads))
+//   spreadScore = 1 / (1 + meanSpread / cityDiagonal)
+//   score       = 100 * (0.5*loadScore + 0.5*spreadScore)
+//
+// Each layer is scored independently, because a dense shop
+// network and a sparse emergency network should not be forced
+// to agree. The headline number is the mean across layers that
+// have enough facilities to score.
 // ============================================================
 
 const LOAD_WEIGHT = 0.5;
 const SPREAD_WEIGHT = 0.5;
 
-function computeMetric() {
+function computeLayerMetric(layerPoints) {
 
-    if (facilityPoints.length < 2) {
+    if (layerPoints.length < 2) {
         return null;
     }
 
     const { blocks, buckets } =
-        assignBlocksToFacilities();
+        assignBlocksToFacilities(layerPoints);
 
     if (!blocks.length) {
         return null;
     }
 
-    const loads =
-        buckets.map(b => b.length);
+    const loads = buckets.map(b => b.length);
+    const spreads = buckets.map(b => maxPairwiseDistance(b));
 
-    const spreads =
-        buckets.map(b => maxPairwiseDistance(b));
-
-    // --------------------------------------------------------
-    // Load balance -> coefficient of variation
-    // --------------------------------------------------------
-
-    const meanLoad =
-        d3.mean(loads) || 0;
+    const meanLoad = d3.mean(loads) || 0;
 
     const loadDeviation =
         meanLoad > 0
             ? (d3.deviation(loads) || 0) / meanLoad
             : 0;
 
-    const loadScore =
-        1 / (1 + loadDeviation);
+    const loadScore = 1 / (1 + loadDeviation);
 
-    // --------------------------------------------------------
-    // Spread, normalized against the city's own diagonal so
-    // the score means the same thing on any map size.
-    // --------------------------------------------------------
-
-    const extent =
-        getVoronoiExtent();
+    const extent = getVoronoiExtent();
 
     const cityDiagonal =
         Math.hypot(
@@ -2576,22 +5049,14 @@ function computeMetric() {
             extent[3] - extent[1]
         ) || 1;
 
-    const meanSpread =
-        d3.mean(spreads) || 0;
-
-    const worstSpread =
-        d3.max(spreads) || 0;
+    const meanSpread = d3.mean(spreads) || 0;
+    const worstSpread = d3.max(spreads) || 0;
 
     const spreadScore =
         1 / (1 + (meanSpread / cityDiagonal));
 
-    // --------------------------------------------------------
-    // Combined score (higher is better)
-    // --------------------------------------------------------
-
     const score =
-        100 *
-        (
+        100 * (
             LOAD_WEIGHT * loadScore +
             SPREAD_WEIGHT * spreadScore
         );
@@ -2614,7 +5079,24 @@ function computeMetric() {
 
 function evaluateMetric() {
 
-    currentMetric = computeMetric();
+    let sum = 0;
+    let scored = 0;
+
+    for (const layer of FACILITY_LAYERS) {
+
+        layer.metric =
+            computeLayerMetric(layer.points);
+
+        if (layer.metric) {
+            sum += layer.metric.score;
+            scored++;
+        }
+    }
+
+    currentMetric =
+        scored > 0
+            ? { score: sum / scored, layers: scored }
+            : null;
 
     updateMetricDisplay();
 
@@ -2637,19 +5119,47 @@ function updateMetricDisplay() {
     metricScore.textContent =
         currentMetric.score.toFixed(2);
 
-    const minLoad =
-        d3.min(currentMetric.loads);
+    const lines = [];
 
-    const maxLoad =
-        d3.max(currentMetric.loads);
+    for (const layer of FACILITY_LAYERS) {
 
-    metricDetail.textContent =
-        `${currentMetric.buckets.length} facilities · ` +
-        `${currentMetric.totalBlocks} blocks\n` +
-        `load ${minLoad}-${maxLoad} ` +
-        `(avg ${currentMetric.meanLoad.toFixed(1)})\n` +
-        `spread avg ${currentMetric.meanSpread.toFixed(0)}px · ` +
-        `worst ${currentMetric.worstSpread.toFixed(0)}px`;
+        if (!layer.metric) {
+
+            lines.push(
+                `${layer.label}: ${layer.points.length} ` +
+                `(need 2+ to score)`
+            );
+
+            continue;
+        }
+
+        const m = layer.metric;
+
+        lines.push(
+            `${layer.label}: ${m.score.toFixed(1)} · ` +
+            `${layer.points.length} sites · ` +
+            `load ${d3.min(m.loads)}-${d3.max(m.loads)} · ` +
+            `spread ${metresLabel(m.meanSpread)}`
+        );
+    }
+
+    const blocks =
+        FACILITY_LAYERS.find(l => l.metric);
+
+    if (blocks) {
+        lines.push(`${blocks.metric.totalBlocks} blocks served`);
+    }
+
+    metricDetail.textContent = lines.join("\n");
+}
+
+
+// Pixels, or real metres once terrain scale is known.
+function metresLabel(px) {
+
+    return metresPerPixel
+        ? `${Math.round(px * metresPerPixel)} m`
+        : `${Math.round(px)} px`;
 }
 
 
@@ -2657,69 +5167,52 @@ function updateMetricDisplay() {
 // ONE OPTIMIZATION EPOCH
 // ============================================================
 //
-// Moves ONLY the facility points. Two forces per facility:
+// Moves ONLY facility points. Two forces per facility:
 //
-//   1. Pull toward the centroid of the blocks it serves.
-//      This directly shrinks that cell's spread.
-//   2. Push/pull along each Delaunay neighbour based on the
-//      load difference. An overloaded facility drifts toward
-//      its lighter neighbours, which shrinks its own territory
-//      and grows theirs - evening the loads out.
+//   1. Pull toward the centroid of the blocks it serves, which
+//      directly shrinks that cell's spread.
+//   2. Push along each Delaunay neighbour by the load
+//      difference. An overloaded facility drifts toward its
+//      lighter neighbours, shrinking its own territory and
+//      growing theirs.
 //
-// The epoch is then accepted only if the metric actually
-// improved. If it got worse the move is rolled back and the
-// step size is halved, so the score is monotonically
-// non-decreasing over epochs.
+// Each layer is accepted or rolled back on its OWN score, so a
+// layer that has converged stops moving without freezing the
+// others.
 // ============================================================
 
 const CENTROID_PULL = 0.5;
 const BALANCE_PULL = 0.35;
 
-function runEpoch() {
+function runLayerEpoch(layer, cityPolygon) {
 
-    if (facilityPoints.length < 2) {
+    if (layer.points.length < 2) {
         return false;
     }
 
     const before =
-        currentMetric || evaluateMetric();
+        layer.metric || computeLayerMetric(layer.points);
 
     if (!before) {
         return false;
     }
 
-    // Snapshot so a bad epoch can be rolled back.
     const snapshot =
-        facilityPoints.map(p => ({
-            x: p.x,
-            y: p.y
-        }));
+        layer.points.map(p => ({ x: p.x, y: p.y }));
 
     const delaunay =
         d3.Delaunay.from(
-            facilityPoints,
+            layer.points,
             d => d.x,
             d => d.y
         );
 
-    const cityPolygon =
-        getBoundaryPolygonPoints(200)
-            .map(q => [q.x, q.y]);
+    const meanLoad = before.meanLoad || 1;
 
-    const meanLoad =
-        before.meanLoad || 1;
+    for (let i = 0; i < layer.points.length; i++) {
 
-    for (
-        let i = 0;
-        i < facilityPoints.length;
-        i++
-    ) {
-
-        const facility =
-            facilityPoints[i];
-
-        const served =
-            before.buckets[i];
+        const facility = layer.points[i];
+        const served = before.buckets[i];
 
         let moveX = 0;
         let moveY = 0;
@@ -2730,18 +5223,12 @@ function runEpoch() {
 
         if (served.length) {
 
-            const centroidX =
-                d3.mean(served, p => p.x);
-
-            const centroidY =
-                d3.mean(served, p => p.y);
-
             moveX +=
-                (centroidX - facility.x) *
+                (d3.mean(served, p => p.x) - facility.x) *
                 CENTROID_PULL;
 
             moveY +=
-                (centroidY - facility.y) *
+                (d3.mean(served, p => p.y) - facility.y) *
                 CENTROID_PULL;
         }
 
@@ -2749,67 +5236,45 @@ function runEpoch() {
         // 2. Load balancing against Delaunay neighbours
         // ----------------------------------------------------
 
-        const myLoad =
-            before.loads[i];
+        const myLoad = before.loads[i];
 
         for (const j of delaunay.neighbors(i)) {
 
-            const neighbor =
-                facilityPoints[j];
+            const neighbor = layer.points[j];
 
             const loadGap =
-                (myLoad - before.loads[j]) /
-                meanLoad;
+                (myLoad - before.loads[j]) / meanLoad;
 
             if (loadGap === 0) {
                 continue;
             }
 
-            const dx =
-                neighbor.x - facility.x;
+            const dx = neighbor.x - facility.x;
+            const dy = neighbor.y - facility.y;
 
-            const dy =
-                neighbor.y - facility.y;
-
-            const dist =
-                Math.hypot(dx, dy);
+            const dist = Math.hypot(dx, dy);
 
             if (dist < 1e-6) {
                 continue;
             }
 
-            // Overloaded (loadGap > 0) -> drift toward the
-            // lighter neighbour, shedding territory to it.
             moveX +=
-                (dx / dist) *
-                loadGap *
-                BALANCE_PULL *
-                dist *
-                0.1;
+                (dx / dist) * loadGap * BALANCE_PULL * dist * 0.1;
 
             moveY +=
-                (dy / dist) *
-                loadGap *
-                BALANCE_PULL *
-                dist *
-                0.1;
+                (dy / dist) * loadGap * BALANCE_PULL * dist * 0.1;
         }
 
         const nextX =
-            facility.x + moveX * facilityStepScale;
+            facility.x + moveX * layer.stepScale;
 
         const nextY =
-            facility.y + moveY * facilityStepScale;
+            facility.y + moveY * layer.stepScale;
 
-        // Facilities must stay inside the city AND on land -
-        // the load-balancing force will happily walk one out
-        // over a bay otherwise.
+        // Facilities must stay inside the city AND on land.
         const insideCity =
             !cityPolygon.length ||
-            d3.polygonContains(
-                cityPolygon,
-                [nextX, nextY]
-            );
+            d3.polygonContains(cityPolygon, [nextX, nextY]);
 
         if (insideCity && isLand(nextX, nextY)) {
             facility.x = nextX;
@@ -2818,33 +5283,63 @@ function runEpoch() {
     }
 
     const after =
-        computeMetric();
+        computeLayerMetric(layer.points);
 
     if (!after || after.score < before.score) {
 
-        // Roll back and take smaller steps next time.
-        for (
-            let i = 0;
-            i < facilityPoints.length;
-            i++
-        ) {
-            facilityPoints[i].x = snapshot[i].x;
-            facilityPoints[i].y = snapshot[i].y;
+        for (let i = 0; i < layer.points.length; i++) {
+            layer.points[i].x = snapshot[i].x;
+            layer.points[i].y = snapshot[i].y;
         }
 
-        facilityStepScale *= 0.5;
+        layer.stepScale *= 0.5;
 
         return false;
     }
 
-    currentMetric = after;
+    layer.metric = after;
 
-    facilityStepScale =
-        Math.min(2, facilityStepScale * 1.05);
+    layer.stepScale =
+        Math.min(2, layer.stepScale * 1.05);
+
+    return true;
+}
+
+
+function runEpoch() {
+
+    const cityPolygon =
+        getBoundaryPolygonPoints(200)
+            .map(q => [q.x, q.y]);
+
+    let improvedAny = false;
+
+    for (const layer of FACILITY_LAYERS) {
+
+        if (runLayerEpoch(layer, cityPolygon)) {
+            improvedAny = true;
+        }
+    }
+
+    // Refresh the aggregate from the per-layer metrics.
+    let sum = 0;
+    let scored = 0;
+
+    for (const layer of FACILITY_LAYERS) {
+        if (layer.metric) {
+            sum += layer.metric.score;
+            scored++;
+        }
+    }
+
+    currentMetric =
+        scored > 0
+            ? { score: sum / scored, layers: scored }
+            : null;
 
     updateMetricDisplay();
 
-    return true;
+    return improvedAny;
 }
 
 
@@ -2858,7 +5353,7 @@ function startOptimization(epochs) {
         return;
     }
 
-    if (facilityPoints.length < 2) {
+    if (!FACILITY_LAYERS.some(l => l.points.length >= 2)) {
         return;
     }
 
@@ -2866,10 +5361,14 @@ function startOptimization(epochs) {
 
     optimizeBtn.disabled = true;
 
-    facilityStepScale = 1;
+    for (const layer of FACILITY_LAYERS) {
+        layer.stepScale = 1;
+    }
 
-    const startScore =
-        (currentMetric || evaluateMetric()).score;
+    const start =
+        (currentMetric || evaluateMetric());
+
+    const startScore = start ? start.score : 0;
 
     logStep(
         `Optimization started (${epochs} epochs, ` +
@@ -2882,33 +5381,15 @@ function startOptimization(epochs) {
 
         if (!optimizing || epoch >= epochs) {
 
-            optimizing = false;
-
-            optimizeBtn.disabled = false;
-
-            const endScore =
-                currentMetric
-                    ? currentMetric.score
-                    : startScore;
-
-            status.textContent =
-                `Optimization complete. ` +
-                `Score ${endScore.toFixed(2)}.`;
-
-            logStep(
-                `Optimization finished after ${epoch} epochs: ` +
-                `${startScore.toFixed(2)} -> ${endScore.toFixed(2)} ` +
-                `(${(endScore - startScore >= 0 ? "+" : "")}` +
-                `${(endScore - startScore).toFixed(2)}).`
-            );
-
+            finish();
             return;
         }
 
-        const improved =
-            runEpoch();
+        const improved = runEpoch();
 
         epoch++;
+
+        invalidateRoadNetwork();
 
         drawFacilities();
 
@@ -2916,41 +5397,69 @@ function startOptimization(epochs) {
             `Epoch ${epoch}/${epochs} · ` +
             `score ${currentMetric.score.toFixed(2)}`;
 
-        // Log periodically rather than every epoch, so the
-        // panel stays readable on long runs.
         if (
             epoch === 1 ||
             epoch % 10 === 0 ||
             epoch === epochs
         ) {
             logStep(
-                `Epoch ${epoch}: score ` +
-                `${currentMetric.score.toFixed(2)} ` +
-                `(load ${currentMetric.loadScore.toFixed(3)}, ` +
-                `spread ${currentMetric.spreadScore.toFixed(3)})`
+                `Epoch ${epoch}: ` +
+                FACILITY_LAYERS
+                    .filter(l => l.metric)
+                    .map(l =>
+                        `${l.label} ${l.metric.score.toFixed(1)}`
+                    )
+                    .join(", ")
             );
         }
 
-        // Steps have collapsed to nothing - we've converged.
-        if (!improved && facilityStepScale < 0.01) {
-
-            optimizing = false;
-
-            optimizeBtn.disabled = false;
-
-            status.textContent =
-                `Converged at epoch ${epoch} · ` +
-                `score ${currentMetric.score.toFixed(2)}`;
-
-            logStep(
-                `Converged early at epoch ${epoch} ` +
-                `(score ${currentMetric.score.toFixed(2)}).`
+        // Every layer's step size has collapsed - converged.
+        const allStalled =
+            !improved &&
+            FACILITY_LAYERS.every(
+                l => l.points.length < 2 || l.stepScale < 0.01
             );
 
+        if (allStalled) {
+            finish(true, epoch);
             return;
         }
 
         requestAnimationFrame(step);
+    }
+
+    function finish(converged, atEpoch) {
+
+        optimizing = false;
+
+        optimizeBtn.disabled = false;
+
+        const endScore =
+            currentMetric ? currentMetric.score : startScore;
+
+        if (converged) {
+
+            status.textContent =
+                `Converged at epoch ${atEpoch} · ` +
+                `score ${endScore.toFixed(2)}`;
+
+            logStep(
+                `Converged early at epoch ${atEpoch} ` +
+                `(score ${endScore.toFixed(2)}).`
+            );
+
+        } else {
+
+            status.textContent =
+                `Optimization complete. Score ${endScore.toFixed(2)}.`;
+
+            logStep(
+                `Optimization finished after ${epoch} epochs: ` +
+                `${startScore.toFixed(2)} -> ${endScore.toFixed(2)} ` +
+                `(${endScore - startScore >= 0 ? "+" : ""}` +
+                `${(endScore - startScore).toFixed(2)}).`
+            );
+        }
     }
 
     requestAnimationFrame(step);
@@ -2992,9 +5501,12 @@ function closeCity() {
         beforeCount - points.length;
 
 
+    invalidateRoadNetwork();
+
     drawBoundary();
     drawPoints();
     drawVoronoi();
+    drawUrquhart();
 
     relaxBtn.disabled = false;
     placeFacilitiesBtn.disabled = false;
@@ -3449,6 +5961,8 @@ viewport.addEventListener(
 
         drawVoronoi();
 
+        drawUrquhart();
+
         drawFacilities();
 
     },
@@ -3472,7 +5986,11 @@ resetBtn.addEventListener(
         optimizeBtn.disabled = true;
 
 
-        facilityPoints = [];
+        for (const layer of FACILITY_LAYERS) {
+            layer.points = [];
+            layer.metric = null;
+            layer.stepScale = 1;
+        }
 
         currentMetric = null;
 
@@ -3481,6 +5999,8 @@ resetBtn.addEventListener(
         facilityVoronoiLayer.selectAll("*").remove();
         facilityPointLayer.selectAll("*").remove();
 
+
+        invalidateRoadNetwork();
 
         boundaryPoints = [];
 
@@ -3580,6 +6100,8 @@ seaLevelInput.addEventListener(
 
         seaLevelM = Number(seaLevelInput.value) || 0;
 
+        invalidateRoadNetwork();
+
         renderTerrain();
 
         if (cityClosed) {
@@ -3591,13 +6113,17 @@ seaLevelInput.addEventListener(
 
             const drowned = before - points.length;
 
-            const facBefore = facilityPoints.length;
+            let facDrowned = 0;
 
-            facilityPoints =
-                facilityPoints.filter(p => isLand(p.x, p.y));
+            for (const layer of FACILITY_LAYERS) {
 
-            const facDrowned =
-                facBefore - facilityPoints.length;
+                const n = layer.points.length;
+
+                layer.points =
+                    layer.points.filter(p => isLand(p.x, p.y));
+
+                facDrowned += n - layer.points.length;
+            }
 
             if (drowned > 0 || facDrowned > 0) {
                 logStep(
@@ -3609,7 +6135,7 @@ seaLevelInput.addEventListener(
             }
 
             optimizeBtn.disabled =
-                facilityPoints.length < 2;
+                !FACILITY_LAYERS.some(l => l.points.length >= 2);
 
             draw();
             evaluateMetric();
@@ -3618,6 +6144,154 @@ seaLevelInput.addEventListener(
 
             logStep(`Sea level set to ${seaLevelM} m.`);
         }
+    }
+);
+
+
+straightenSlider.addEventListener(
+    "input",
+    () => {
+
+        straightenValue.textContent =
+            straightenSlider.value;
+    }
+);
+
+
+attemptsSlider.addEventListener(
+    "input",
+    () => {
+
+        attemptsValue.textContent =
+            attemptsSlider.value;
+    }
+);
+
+
+speedSlider.addEventListener(
+    "input",
+    () => {
+
+        speedValue.textContent =
+            speedSlider.value;
+    }
+);
+
+
+junctionRadiusSlider.addEventListener(
+    "input",
+    () => {
+
+        junctionRadiusValue.textContent =
+            junctionRadiusSlider.value;
+    }
+);
+
+
+junctionToggle.addEventListener(
+    "change",
+    () => {
+
+        drawUrquhart();
+    }
+);
+
+
+reductionSlider.addEventListener(
+    "input",
+    () => {
+
+        reductionValue.textContent =
+            `${reductionSlider.value}%`;
+    }
+);
+
+
+simplifyKSlider.addEventListener(
+    "input",
+    () => {
+
+        simplifyKValue.textContent =
+            simplifyKSlider.value;
+    }
+);
+
+
+simplifyBtn.addEventListener(
+    "click",
+    runRoadSimplification
+);
+
+
+extraEdgeSlider.addEventListener(
+    "input",
+    () => {
+
+        invalidateRoadNetwork();
+
+        extraEdgeValue.textContent =
+            `${extraEdgeSlider.value}%`;
+
+        drawUrquhart();
+    }
+);
+
+
+pruneToggle.addEventListener(
+    "change",
+    () => {
+
+        invalidateRoadNetwork();
+
+        drawUrquhart();
+
+        if (roadNetwork) {
+            logStep(
+                pruneToggle.checked
+                    ? `Pruned ${roadNetwork.prunedNodes} cul-de-sac ` +
+                      `nodes; α now ` +
+                      `${roadNetwork.roadIndices.alpha.toFixed(3)}.`
+                    : "Cul-de-sacs restored."
+            );
+        }
+    }
+);
+
+
+facilityLinkSlider.addEventListener(
+    "input",
+    () => {
+
+        invalidateRoadNetwork();
+
+        facilityLinkValue.textContent =
+            facilityLinkSlider.value;
+
+        drawUrquhart();
+    }
+);
+
+
+urquhartToggle.addEventListener(
+    "change",
+    () => {
+
+        drawUrquhart();
+
+        if (!urquhartToggle.checked) {
+            logStep("Building network hidden.");
+            return;
+        }
+
+        const st = urquhartStats();
+
+        logStep(
+            st
+                ? `Building network: ${st.buildings} cell corners, ` +
+                  `${st.edges} edges, total ` +
+                  `${metresLabel(st.totalLength)}.`
+                : "Building network: not enough cells yet."
+        );
     }
 );
 
@@ -3689,15 +6363,6 @@ relaxBtn.addEventListener(
 // FACILITY CONTROLS
 // ============================================================
 
-facilityRSlider.addEventListener(
-    "input",
-    () => {
-
-        facilityRValue.textContent =
-            facilityRSlider.value;
-    }
-);
-
 epochsSlider.addEventListener(
     "input",
     () => {
@@ -3731,19 +6396,134 @@ optimizeBtn.addEventListener(
     }
 );
 
-facilityToggle.addEventListener(
-    "change",
-    () => {
+// ------------------------------------------------------------
+// Per-layer spacing sliders (Facilities tab)
+// ------------------------------------------------------------
 
-        drawFacilities();
+function buildLayerControls() {
 
-        logStep(
-            facilityToggle.checked
-                ? "Facility layer shown."
-                : "Facility layer hidden."
-        );
+    const host =
+        document.getElementById("layerControls");
+
+    host.innerHTML = "";
+
+    for (const layer of FACILITY_LAYERS) {
+
+        const wrap = document.createElement("div");
+        wrap.className = "layer-control";
+
+        const head = document.createElement("label");
+
+        head.innerHTML =
+            `<span><i class="swatch" style="background:${layer.color}"></i>` +
+            `${layer.label} spacing</span>` +
+            `<span id="sp-${layer.key}">${layer.spacing}</span>`;
+
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.min = "20";
+        slider.max = "300";
+        slider.value = layer.spacing;
+
+        slider.addEventListener("input", () => {
+            layer.spacing = Number(slider.value);
+            document.getElementById(`sp-${layer.key}`)
+                .textContent = layer.spacing;
+        });
+
+        const groups = document.createElement("div");
+        groups.className = "layer-groups";
+        groups.textContent =
+            `${layer.groups.length} OSM groups: ` +
+            layer.groups.slice(0, 3).join(", ") +
+            (layer.groups.length > 3 ? "…" : "");
+        groups.title = layer.groups.join("\n");
+
+        wrap.appendChild(head);
+        wrap.appendChild(slider);
+        wrap.appendChild(groups);
+
+        host.appendChild(wrap);
     }
-);
+}
+
+
+// ------------------------------------------------------------
+// Per-layer visibility toggles (always-visible Layers bar)
+// ------------------------------------------------------------
+
+function buildLayerToggles() {
+
+    const host =
+        document.getElementById("facilityToggles");
+
+    host.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "toggle-grid-head";
+    header.innerHTML =
+        "<span></span><span>Cells</span><span>Delaunay</span>";
+    host.appendChild(header);
+
+    for (const layer of FACILITY_LAYERS) {
+
+        const row = document.createElement("div");
+        row.className = "toggle-grid-row";
+
+        const name = document.createElement("label");
+        name.className = "layer-name";
+        name.innerHTML =
+            `<input type="checkbox" ${layer.visible ? "checked" : ""}>` +
+            `<i class="swatch" style="background:${layer.color}"></i>` +
+            `${layer.label}`;
+
+        name.querySelector("input")
+            .addEventListener("change", e => {
+                layer.visible = e.target.checked;
+                invalidateRoadNetwork();
+                drawFacilities();
+                // Facility spurs only exist for visible layers,
+                // so the road network has to be redrawn too.
+                drawUrquhart();
+                logStep(
+                    `${layer.label} layer ` +
+                    (layer.visible ? "shown." : "hidden.")
+                );
+            });
+
+        const cells = document.createElement("input");
+        cells.type = "checkbox";
+        cells.checked = layer.showCells;
+        cells.title = `${layer.label} Voronoi service areas`;
+        cells.addEventListener("change", () => {
+            layer.showCells = cells.checked;
+            drawFacilities();
+        });
+
+        const tri = document.createElement("input");
+        tri.type = "checkbox";
+        tri.checked = layer.showDelaunay;
+        tri.title = `${layer.label} Delaunay triangulation`;
+        tri.addEventListener("change", () => {
+            layer.showDelaunay = tri.checked;
+            drawFacilities();
+            logStep(
+                `${layer.label} Delaunay ` +
+                (layer.showDelaunay ? "shown." : "hidden.")
+            );
+        });
+
+        row.appendChild(name);
+        row.appendChild(cells);
+        row.appendChild(tri);
+
+        host.appendChild(row);
+    }
+}
+
+
+buildLayerControls();
+buildLayerToggles();
 
 
 

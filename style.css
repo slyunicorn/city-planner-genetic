@@ -160,13 +160,54 @@ body {
 
 
 /* =========================================================
+   URQUHART BUILDING NETWORK
+   ========================================================= */
+
+.facility-link {
+    fill: none;
+
+    stroke-width: 1.6;
+    stroke-opacity: 0.9;
+    stroke-linecap: round;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+.road-junction {
+    fill: #fff1b8;
+
+    pointer-events: none;
+}
+
+.building-point {
+    fill: #ffeeb0;
+
+    pointer-events: none;
+}
+
+.urquhart-edge {
+    fill: none;
+
+    stroke: #ff9e3d;
+    stroke-width: 1.4;
+    stroke-linecap: round;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+
+/* =========================================================
    FACILITIES
    ========================================================= */
 
-.facility-cell {
-    fill: rgba(255, 60, 60, 0.06);
+/* Stroke and fill come from each layer's own colour, set
+   inline in drawFacilities(). */
 
-    stroke: #ff3b3b;
+.facility-cell {
     stroke-width: 2;
 
     vector-effect: non-scaling-stroke;
@@ -174,9 +215,19 @@ body {
     pointer-events: none;
 }
 
-.facility-point {
-    fill: #ff3b3b;
+.facility-delaunay {
+    fill: none;
 
+    stroke-width: 1;
+    stroke-opacity: 0.55;
+    stroke-dasharray: 4 3;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+.facility-point {
     stroke: white;
     stroke-width: 1.5;
 
@@ -407,6 +458,96 @@ button.ghost:hover {
 
 
 /* =========================================================
+   FACILITY LAYER CONTROLS
+   ========================================================= */
+
+.swatch {
+    display: inline-block;
+
+    width: 9px;
+    height: 9px;
+
+    margin-right: 6px;
+
+    border-radius: 2px;
+
+    vertical-align: baseline;
+}
+
+.layer-control {
+    margin-bottom: 12px;
+}
+
+.layer-groups {
+    margin-top: 3px;
+
+    font-size: 10px;
+
+    line-height: 1.35;
+
+    color: #777;
+
+    /* The full list is in the title attribute. */
+    cursor: help;
+}
+
+#facilityToggles {
+    margin: 6px 12px 0;
+}
+
+.toggle-grid-head,
+.toggle-grid-row {
+    display: grid;
+
+    grid-template-columns: 1fr 42px 58px;
+
+    align-items: center;
+
+    gap: 4px;
+}
+
+.toggle-grid-head {
+    margin-bottom: 3px;
+
+    font-size: 9px;
+
+    letter-spacing: 0.04em;
+
+    text-transform: uppercase;
+
+    color: #777;
+
+    text-align: center;
+}
+
+.toggle-grid-head span:first-child {
+    text-align: left;
+}
+
+.toggle-grid-row {
+    padding: 3px 0;
+
+    font-size: 13px;
+}
+
+.toggle-grid-row .layer-name {
+    display: flex;
+
+    align-items: center;
+
+    gap: 6px;
+
+    cursor: pointer;
+}
+
+.toggle-grid-row input[type="checkbox"] {
+    justify-self: center;
+
+    cursor: pointer;
+}
+
+
+/* =========================================================
    TERRAIN FIELDS
    ========================================================= */
 
@@ -524,6 +665,47 @@ button:disabled:hover {
     text-transform: uppercase;
 
     color: #ff8a8a;
+}
+
+
+/* =========================================================
+   HINTS + ROAD STATS
+   ========================================================= */
+
+.hint {
+    margin-top: 5px;
+
+    font-size: 10px;
+
+    line-height: 1.4;
+
+    color: #777;
+}
+
+.hint.indent {
+    margin: 2px 12px 8px 30px;
+}
+
+#roadStats {
+    margin: 12px;
+
+    padding: 9px 10px;
+
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+    font-size: 11px;
+
+    line-height: 1.6;
+
+    color: #cfe9ff;
+
+    white-space: pre-line;
+
+    background: rgba(255, 158, 61, 0.07);
+
+    border: 1px solid rgba(255, 158, 61, 0.25);
+
+    border-radius: 6px;
 }
 
 

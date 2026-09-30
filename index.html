@@ -26,6 +26,7 @@
             </defs>
 
             <g id="voronoiLayer"></g>
+            <g id="urquhartLayer"></g>
             <g id="boundaryLayer"></g>
             <g id="pointLayer"></g>
             <g id="facilityVoronoiLayer"></g>
@@ -54,6 +55,7 @@
         <button class="tab active" data-tab="terrain" role="tab">Terrain</button>
         <button class="tab" data-tab="blocks" role="tab">Blocks</button>
         <button class="tab" data-tab="facilities" role="tab">Facilities</button>
+        <button class="tab" data-tab="roads" role="tab">Roads</button>
     </div>
 
 
@@ -165,14 +167,7 @@
 
         <section class="tab-panel" data-panel="facilities">
 
-            <div class="control-section">
-                <label>
-                    <span>Facility Spacing</span>
-                    <span id="facilityRValue">90</span>
-                </label>
-
-                <input id="facilityRSlider" type="range" min="20" max="300" value="90">
-            </div>
+            <div class="control-section" id="layerControls"></div>
 
             <button id="placeFacilitiesBtn" disabled>
                 Place Facilities
@@ -199,6 +194,157 @@
 
         </section>
 
+        <!-- ---------------------------------------------------
+             ROADS
+             --------------------------------------------------- -->
+
+        <section class="tab-panel" data-panel="roads">
+
+            <div class="control-section">
+                <label>
+                    <span>Extra edges</span>
+                    <span id="extraEdgeValue">0%</span>
+                </label>
+
+                <input id="extraEdgeSlider" type="range" min="0" max="100" value="0">
+
+                <div class="hint">
+                    Adds back the shortest of the edges Urquhart
+                    discarded, creating circuits. Raises α and γ.
+                </div>
+            </div>
+
+            <label class="checkbox-row">
+                <input id="pruneToggle" type="checkbox">
+                Prune cul-de-sacs
+            </label>
+
+            <div class="hint indent">
+                Repeatedly drops degree-1 nodes, so no road segment
+                serves a cell without connecting through it.
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Links per facility</span>
+                    <span id="facilityLinkValue">1</span>
+                </label>
+
+                <input id="facilityLinkSlider" type="range" min="0" max="4" value="1">
+
+                <div class="hint">
+                    1 link is a spur (a dead end). 2 or more give
+                    each facility alternate routes.
+                </div>
+            </div>
+
+            <label class="checkbox-row">
+                <input id="junctionToggle" type="checkbox">
+                Prune at junctions only
+            </label>
+
+            <div class="hint indent">
+                Picks nodes that sit in an open spot but are ringed
+                by dense ones, never two adjacent, and prunes only
+                there.
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Junction radius</span>
+                    <span id="junctionRadiusValue">40</span>
+                </label>
+
+                <input id="junctionRadiusSlider" type="range" min="10" max="150" step="5" value="40">
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Road budget cut</span>
+                    <span id="reductionValue">25%</span>
+                </label>
+
+                <input id="reductionSlider" type="range" min="0" max="60" step="5" value="25">
+
+                <div class="hint">
+                    Share of total road length to remove. The run
+                    stops when the budget is met, or when every
+                    remaining road is either a cell's only link or
+                    a bridge.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Removal bias k</span>
+                    <span id="simplifyKValue">300</span>
+                </label>
+
+                <input id="simplifyKSlider" type="range" min="50" max="3000" step="50" value="300">
+
+                <div class="hint">
+                    Sigmoid sharpness. Low k removes near-randomly,
+                    high k only removes clear improvements.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Attempts</span>
+                    <span id="attemptsValue">6</span>
+                </label>
+
+                <input id="attemptsSlider" type="range" min="1" max="20" value="6">
+
+                <div class="hint">
+                    Independent tries from the same starting network.
+                    The best-scoring one is kept.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Speed</span>
+                    <span id="speedValue">6</span>
+                </label>
+
+                <input id="speedSlider" type="range" min="1" max="60" value="6">
+
+                <div class="hint">
+                    Removals per frame. Low is slow and watchable.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Straighten chains</span>
+                    <span id="straightenValue">30</span>
+                </label>
+
+                <input id="straightenSlider" type="range" min="0" max="120" value="30">
+
+                <div class="hint">
+                    Final relaxation. Mid-chain nodes drift toward
+                    the line between their neighbours, so a chain
+                    converges on one slope. Junctions never move.
+                    0 turns it off.
+                </div>
+            </div>
+
+            <button id="simplifyBtn">
+                Simplify Network
+            </button>
+
+            <div class="hint indent">
+                Probabilistic. Targets α 0.20–0.45, β 1.30–1.80,
+                γ 0.40–0.60. Never strands a cell or splits the
+                graph. Each run differs.
+            </div>
+
+            <div id="roadStats">Enable the Building Network layer to measure.</div>
+
+        </section>
+
     </div>
 
 
@@ -217,13 +363,15 @@
 
         <label class="checkbox-row">
             <input id="voronoiToggle" type="checkbox">
-            Voronoi Diagram
+            Block Voronoi
         </label>
 
         <label class="checkbox-row">
-            <input id="facilityToggle" type="checkbox" checked>
-            Facility Layer
+            <input id="urquhartToggle" type="checkbox">
+            Building Network (Urquhart)
         </label>
+
+        <div id="facilityToggles"></div>
 
         <button id="resetBtn" class="ghost">
             Reset City
