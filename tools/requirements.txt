@@ -1,0 +1,8 @@
+# Python 3.11. Install: python3 -m venv tools/.venv && tools/.venv/bin/pip install -r tools/requirements.txt
+osmnx==2.1.1
+osmium==4.3.2
+rasterio==1.4.4
+geopandas==1.2.0
+shapely==2.2.0
+pandas==3.1.0
+numpy==2.4.6

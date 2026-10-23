@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI City Planner</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div id="viewport">
+
+    <!-- Everything inside this moves/zooms together -->
+    <div id="world">
+
+        <canvas id="map"></canvas>
+        <canvas id="landcoverCanvas"></canvas>
+
+        <svg id="viz">
+            <defs>
+                <clipPath id="cityClip">
+                    <path id="cityClipPath"></path>
+                </clipPath>
+            </defs>
+
+            <g id="voronoiLayer"></g>
+            <g id="landCoverCellLayer"></g>
+            <g id="urquhartLayer"></g>
+            <g id="boundaryLayer"></g>
+            <g id="pointLayer"></g>
+            <g id="facilityVoronoiLayer"></g>
+            <g id="facilityPointLayer"></g>
+            <g id="vertexLayer"></g>
+        </svg>
+
+    </div>
+
+</div>
+
+
+<div id="controls">
+
+    <div id="controls-header">
+        <span>City Planner</span>
+        <span id="drag-hint">⠿</span>
+    </div>
+
+
+    <!-- =========================================================
+         TABS
+         ========================================================= -->
+
+    <div id="tabBar" role="tablist">
+        <button class="tab active" data-tab="terrain" role="tab">Terrain</button>
+        <button class="tab" data-tab="blocks" role="tab">Blocks</button>
+        <button class="tab" data-tab="facilities" role="tab">Facilities</button>
+        <button class="tab" data-tab="roads" role="tab">Roads</button>
+    </div>
+
+
+    <div id="tabBody">
+
+        <!-- ---------------------------------------------------
+             TERRAIN
+             --------------------------------------------------- -->
+
+        <section class="tab-panel active" data-panel="terrain">
+
+            <div class="control-section">
+                <label class="field">
+                    <span>Search city</span>
+                    <input id="citySearchInput" type="text" placeholder="e.g. Chennai, India" autocomplete="off">
+                </label>
+
+                <div id="citySearchResults" class="city-dropdown hidden"></div>
+
+                <div class="hint">
+                    Pick a result to fill in the coordinates below, or
+                    enter them directly.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <div class="field-row">
+                    <label class="field">
+                        <span>Latitude</span>
+                        <input id="latInput" type="number" step="0.0001" value="12.9229">
+                    </label>
+
+                    <label class="field">
+                        <span>Longitude</span>
+                        <input id="lonInput" type="number" step="0.0001" value="80.1275">
+                    </label>
+                </div>
+
+                <div class="field-row">
+                    <label class="field">
+                        <span>Radius (m)</span>
+                        <input id="distInput" type="number" step="100" min="100" value="3000">
+                    </label>
+
+                    <label class="field">
+                        <span>Sea level (m)</span>
+                        <input id="seaLevelInput" type="number" step="1" value="0">
+                    </label>
+                </div>
+
+                <div class="field-row">
+                    <label class="field">
+                        <span>Grid</span>
+                        <select id="sizeSelect">
+                            <option value="256">256</option>
+                            <option value="512" selected>512</option>
+                            <option value="1024">1024</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+
+            <button id="loadTerrainBtn">
+                Load Terrain
+            </button>
+
+            <div id="scaleNote">Loading terrain...</div>
+
+            <div class="control-section">
+                <div class="field-row">
+                    <label class="field">
+                        <span>Max slope (°)</span>
+                        <input id="maxSlopeInput" type="number" step="1" min="1" max="60" value="15">
+                    </label>
+
+                    <label class="field">
+                        <span>River buffer (m)</span>
+                        <input id="riverBufferInput" type="number" step="5" min="0" value="30">
+                    </label>
+                </div>
+
+                <div class="hint">
+                    Water, forest, desert, wetland, mangrove, snow/tundra,
+                    and anything steeper than the max slope are marked
+                    unbuildable (ESA WorldCover land cover, 10 m).
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label class="field">
+                    <span>Land cover source</span>
+                    <select id="landCoverSourceSelect">
+                        <option value="auto" selected>Auto (local server, ESA, Esri, OpenStreetMap)</option>
+                        <option value="server">Local OSM server (tools/serve.py)</option>
+                        <option value="esa">ESA WorldCover</option>
+                        <option value="esri">Esri Sentinel-2</option>
+                        <option value="osm">OpenStreetMap</option>
+                    </select>
+                </label>
+            </div>
+
+            <button id="loadLandCoverBtn">
+                Load Land Cover
+            </button>
+
+            <label class="file-btn">
+                Load from file (.tif)
+                <input id="landCoverFileInput" type="file" accept=".tif,.tiff" multiple hidden>
+            </label>
+
+            <div id="landCoverNote" class="hint">Not loaded yet.</div>
+
+        </section>
+
+
+        <!-- ---------------------------------------------------
+             BLOCKS
+             --------------------------------------------------- -->
+
+        <section class="tab-panel" data-panel="blocks">
+
+            <div class="control-section">
+                <label>
+                    <span>R (spacing)</span>
+                    <span id="rValue">18</span>
+                </label>
+
+                <input id="rSlider" type="range" min="3" max="100" value="18">
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>K (attempts)</span>
+                    <span id="kValue">30</span>
+                </label>
+
+                <input id="kSlider" type="range" min="1" max="100" value="30">
+            </div>
+
+            <button id="generateBtn">
+                Generate Poisson Points
+            </button>
+
+            <button id="closeBtn">
+                Close City Boundary
+            </button>
+
+            <div class="control-section">
+                <label>
+                    <span>Relax Iterations</span>
+                    <span id="relaxIterationsValue">50</span>
+                </label>
+
+                <input id="relaxIterationsSlider" type="range" min="1" max="300" value="50">
+            </div>
+
+            <button id="relaxBtn" disabled>
+                Relax Points
+            </button>
+
+        </section>
+
+
+        <!-- ---------------------------------------------------
+             FACILITIES
+             --------------------------------------------------- -->
+
+        <section class="tab-panel" data-panel="facilities">
+
+            <div class="control-section" id="layerControls"></div>
+
+            <button id="placeFacilitiesBtn" disabled>
+                Place Facilities
+            </button>
+
+            <div class="control-section">
+                <label>
+                    <span>Epochs</span>
+                    <span id="epochsValue">100</span>
+                </label>
+
+                <input id="epochsSlider" type="range" min="1" max="500" value="100">
+            </div>
+
+            <button id="optimizeBtn" disabled>
+                Optimize City Plan
+            </button>
+
+            <div id="metric">
+                <div id="metricLabel">Score</div>
+                <div id="metricScore">--</div>
+                <div id="metricDetail">Place facilities to measure.</div>
+            </div>
+
+        </section>
+
+        <!-- ---------------------------------------------------
+             ROADS
+             --------------------------------------------------- -->
+
+        <section class="tab-panel" data-panel="roads">
+
+            <div class="control-section">
+                <label>
+                    <span>Extra edges</span>
+                    <span id="extraEdgeValue">0%</span>
+                </label>
+
+                <input id="extraEdgeSlider" type="range" min="0" max="100" value="0">
+
+                <div class="hint">
+                    Adds back the shortest of the edges Urquhart
+                    discarded, creating circuits. Raises α and γ.
+                </div>
+            </div>
+
+            <label class="checkbox-row">
+                <input id="pruneToggle" type="checkbox">
+                Prune cul-de-sacs
+            </label>
+
+            <div class="hint indent">
+                Repeatedly drops degree-1 nodes, so no road segment
+                serves a cell without connecting through it.
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Links per facility</span>
+                    <span id="facilityLinkValue">1</span>
+                </label>
+
+                <input id="facilityLinkSlider" type="range" min="0" max="4" value="1">
+
+                <div class="hint">
+                    1 link is a spur (a dead end). 2 or more give
+                    each facility alternate routes.
+                </div>
+            </div>
+
+            <label class="checkbox-row">
+                <input id="junctionToggle" type="checkbox">
+                Prune at junctions only
+            </label>
+
+            <div class="hint indent">
+                Picks nodes that sit in an open spot but are ringed
+                by dense ones, never two adjacent, and prunes only
+                there.
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Junction radius</span>
+                    <span id="junctionRadiusValue">40</span>
+                </label>
+
+                <input id="junctionRadiusSlider" type="range" min="10" max="150" step="5" value="40">
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Road budget cut</span>
+                    <span id="reductionValue">25%</span>
+                </label>
+
+                <input id="reductionSlider" type="range" min="0" max="60" step="5" value="25">
+
+                <div class="hint">
+                    Share of total road length to remove. The run
+                    stops when the budget is met, or when every
+                    remaining road is either a cell's only link or
+                    a bridge.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Removal bias k</span>
+                    <span id="simplifyKValue">300</span>
+                </label>
+
+                <input id="simplifyKSlider" type="range" min="50" max="3000" step="50" value="300">
+
+                <div class="hint">
+                    Sigmoid sharpness. Low k removes near-randomly,
+                    high k only removes clear improvements.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Attempts</span>
+                    <span id="attemptsValue">6</span>
+                </label>
+
+                <input id="attemptsSlider" type="range" min="1" max="20" value="6">
+
+                <div class="hint">
+                    Independent tries from the same starting network.
+                    The best-scoring one is kept.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Speed</span>
+                    <span id="speedValue">6</span>
+                </label>
+
+                <input id="speedSlider" type="range" min="1" max="60" value="6">
+
+                <div class="hint">
+                    Removals per frame. Low is slow and watchable.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Straighten chains</span>
+                    <span id="straightenValue">30</span>
+                </label>
+
+                <input id="straightenSlider" type="range" min="0" max="120" value="30">
+
+                <div class="hint">
+                    Final relaxation. Mid-chain nodes drift toward
+                    the line between their neighbours, so a chain
+                    converges on one slope. Junctions never move.
+                    0 turns it off.
+                </div>
+            </div>
+
+            <button id="simplifyBtn">
+                Simplify Network
+            </button>
+
+            <div class="hint indent">
+                Probabilistic. Targets α 0.20–0.45, β 1.30–1.80,
+                γ 0.40–0.60. Never strands a cell or splits the
+                graph. Each run differs.
+            </div>
+
+            <div id="roadStats">Enable the Building Network layer to measure.</div>
+
+        </section>
+
+    </div>
+
+
+    <!-- =========================================================
+         ALWAYS VISIBLE — layer toggles, reset, status
+         ========================================================= -->
+
+    <div id="layerBar">
+
+        <div class="layer-title">Layers</div>
+
+        <label class="checkbox-row">
+            <input id="sobelToggle" type="checkbox">
+            Sobel Slope Map
+        </label>
+
+        <label class="checkbox-row">
+            <input id="voronoiToggle" type="checkbox">
+            Block Voronoi
+        </label>
+
+        <label class="checkbox-row">
+            <input id="urquhartToggle" type="checkbox">
+            Building Network (Urquhart)
+        </label>
+
+        <label class="checkbox-row">
+            <input id="landCoverToggle" type="checkbox" checked>
+            Land Cover Mask
+        </label>
+
+        <label class="checkbox-row sub">
+            <input id="landCoverAllToggle" type="checkbox" checked>
+            Show buildable classes too
+        </label>
+
+        <div id="facilityToggles"></div>
+
+        <button id="resetBtn" class="ghost">
+            Reset City
+        </button>
+
+        <div id="status">
+            Loading terrain...
+        </div>
+
+    </div>
+
+</div>
+
+
+<div id="logPanel">
+
+    <div id="logPanel-header">
+        <span>Log</span>
+        <button id="copyLogBtn" type="button">Copy all</button>
+    </div>
+
+    <div id="logList"></div>
+
+</div>
+
+<div id="landCoverLegend" class="hidden">
+
+    <div id="landCoverLegend-header">
+        Uninhabitable land
+    </div>
+
+    <div id="landCoverLegendList"></div>
+
+    <div id="landCoverAttribution">
+        © ESA WorldCover project 2021 · Elevation: AWS Terrain Tiles
+    </div>
+
+</div>
+
+<div id="landCoverTip" class="hidden"></div>
+
+<script src="js/dom.js"></script>
+<script src="js/log.js"></script>
+<script src="js/state.js"></script>
+<script src="js/facility-layers.js"></script>
+<script src="js/terrain-data.js"></script>
+<script src="js/sobel.js"></script>
+<script src="js/landcover.js"></script>
+<script src="js/terrain-render.js"></script>
+<script src="js/terrain-load.js"></script>
+<script src="js/city-search.js"></script>
+<script src="js/camera.js"></script>
+<script src="js/poisson.js"></script>
+<script src="js/city-draw.js"></script>
+<script src="js/urquhart.js"></script>
+<script src="js/roads-network.js"></script>
+<script src="js/roads-simplify.js"></script>
+<script src="js/roads-junctions.js"></script>
+<script src="js/roads-stepwise.js"></script>
+<script src="js/roads-straighten.js"></script>
+<script src="js/roads-animated.js"></script>
+<script src="js/voronoi-draw.js"></script>
+<script src="js/relaxation.js"></script>
+<script src="js/facilities.js"></script>
+<script src="js/metric.js"></script>
+<script src="js/city-close.js"></script>
+<script src="js/interaction.js"></script>
+<script src="js/controls-map.js"></script>
+<script src="js/controls-roads.js"></script>
+<script src="js/controls-layers.js"></script>
+<script src="js/controls-facilities.js"></script>
+<script src="js/ui-panels.js"></script>
+<script src="js/main.js"></script>
+
+</body>
+</html>

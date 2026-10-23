@@ -1,0 +1,19 @@
+# Notes for Claude Code (kept locally, not published)
+CLAUDE.md
+.claude/
+
+# Python virtual environment (recreate with tools/requirements.txt)
+tools/.venv/
+__pycache__/
+*.pyc
+
+# Downloaded OSM data, prepared copies and built land cover (GBs, re-downloadable)
+tools/data/
+
+# Local test setup / editors / OS
+node_modules/
+d3.min.js
+.vscode/
+.idea/
+.DS_Store
+*.swp

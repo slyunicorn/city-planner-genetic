@@ -1,0 +1,1165 @@
+html,
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: #111;
+}
+
+
+/* =========================================================
+   VIEWPORT
+   ========================================================= */
+
+#viewport {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    touch-action: none;
+
+    cursor: grab;
+}
+
+#viewport.panning {
+    cursor: grabbing;
+}
+
+/* The boundary vertices keep their own grab cursor, which would
+   otherwise be overridden by the viewport's. */
+#viewport .boundary-vertex {
+    cursor: grab;
+}
+
+
+/* =========================================================
+   WORLD
+   ========================================================= */
+
+#world {
+    position: absolute;
+    left: 0;
+    top: 0;
+
+    transform-origin: 0 0;
+
+    will-change: transform;
+}
+
+
+/* =========================================================
+   MAP (terrain canvas)
+   ========================================================= */
+
+#map {
+    /* Terrain is a small grid scaled up; keep the pixels crisp
+       instead of letting the browser smooth them into mush. */
+    image-rendering: pixelated;
+
+    position: absolute;
+
+    left: 0;
+    top: 0;
+
+    display: block;
+
+    pointer-events: none;
+
+    user-select: none;
+}
+
+
+/* =========================================================
+   SVG
+   ========================================================= */
+
+#viz {
+    position: absolute;
+
+    left: 0;
+    top: 0;
+
+    display: block;
+
+    overflow: visible;
+
+    pointer-events: none;
+}
+
+
+/* =========================================================
+   POINTS
+   ========================================================= */
+
+.sample-point {
+    fill: white;
+    opacity: 0.7;
+
+    pointer-events: none;
+}
+
+.city-point {
+    fill: #00e5ff;
+
+    pointer-events: none;
+}
+
+
+/* =========================================================
+   CITY BOUNDARY
+   ========================================================= */
+
+.city-boundary {
+    fill: rgba(0, 200, 255, 0.12);
+
+    stroke: #00d9ff;
+    stroke-width: 2.5;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+
+/* =========================================================
+   BOUNDARY VERTICES
+   ========================================================= */
+
+.boundary-vertex {
+    fill: #00d9ff;
+
+    stroke: white;
+    stroke-width: 1.5;
+
+    vector-effect: non-scaling-stroke;
+
+    cursor: grab;
+
+    pointer-events: all;
+}
+
+.boundary-vertex:active {
+    cursor: grabbing;
+}
+
+
+/* =========================================================
+   VORONOI
+   ========================================================= */
+
+.voronoi-cell {
+    fill: none;
+
+    stroke: rgba(255, 255, 255, 0.5);
+    stroke-width: 1;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+
+/* =========================================================
+   URQUHART BUILDING NETWORK
+   ========================================================= */
+
+.facility-link {
+    fill: none;
+
+    stroke-width: 1.6;
+    stroke-opacity: 0.9;
+    stroke-linecap: round;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+.road-junction {
+    fill: #fff1b8;
+
+    pointer-events: none;
+}
+
+.building-point {
+    fill: #ffeeb0;
+
+    pointer-events: none;
+}
+
+.urquhart-edge {
+    fill: none;
+
+    stroke: #ff9e3d;
+    stroke-width: 1.4;
+    stroke-linecap: round;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+
+/* =========================================================
+   FACILITIES
+   ========================================================= */
+
+/* Stroke and fill come from each layer's own colour, set
+   inline in drawFacilities(). */
+
+.facility-cell {
+    stroke-width: 2;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+.facility-delaunay {
+    fill: none;
+
+    stroke-width: 1;
+    stroke-opacity: 0.55;
+    stroke-dasharray: 4 3;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+.facility-point {
+    stroke: white;
+    stroke-width: 1.5;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+
+/* =========================================================
+   CONTROLS
+   ========================================================= */
+
+#controls {
+    position: fixed;
+
+    left: 20px;
+    top: 20px;
+
+    width: 250px;
+
+    /* Cap the height so the panel never covers the whole map;
+       only the tab body scrolls, so the layer toggles below it
+       stay pinned and visible. */
+    max-height: calc(100vh - 40px);
+
+    display: flex;
+
+    flex-direction: column;
+
+    z-index: 1000;
+
+    padding: 0;
+
+    background: rgba(15, 15, 15, 0.94);
+
+    color: white;
+
+    border: 1px solid rgba(255, 255, 255, 0.15);
+
+    border-radius: 10px;
+
+    box-shadow:
+        0 10px 35px rgba(0, 0, 0, 0.5);
+
+    user-select: none;
+}
+
+
+/* =========================================================
+   CONTROL HEADER
+   ========================================================= */
+
+#controls-header {
+    flex: 0 0 auto;
+
+    height: 38px;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    padding: 0 12px;
+
+    font-weight: bold;
+
+    cursor: grab;
+
+    background: rgba(255, 255, 255, 0.06);
+
+    border-radius: 10px 10px 0 0;
+}
+
+#controls-header:active {
+    cursor: grabbing;
+}
+
+#drag-hint {
+    opacity: 0.5;
+}
+
+
+/* =========================================================
+   SLIDERS
+   ========================================================= */
+
+.control-section {
+    padding: 10px 12px 0;
+}
+
+.control-section label {
+    display: flex;
+
+    justify-content: space-between;
+
+    font-size: 13px;
+
+    margin-bottom: 5px;
+}
+
+input[type="range"] {
+    width: 100%;
+}
+
+
+/* =========================================================
+   TABS
+   ========================================================= */
+
+#tabBar {
+    flex: 0 0 auto;
+
+    display: flex;
+
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.tab {
+    /* Override the global button rule, which is block+margins. */
+    flex: 1;
+
+    width: auto;
+
+    margin: 0;
+
+    padding: 9px 4px;
+
+    font-size: 12px;
+
+    color: #999;
+
+    background: transparent;
+
+    border: none;
+
+    border-bottom: 2px solid transparent;
+
+    border-radius: 0;
+
+    cursor: pointer;
+}
+
+.tab:hover {
+    color: #ddd;
+
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.tab.active {
+    color: #00d9ff;
+
+    font-weight: bold;
+
+    border-bottom-color: #00d9ff;
+}
+
+#tabBody {
+    /* The only scrolling region. Everything below stays put. */
+    flex: 1 1 auto;
+
+    min-height: 0;
+
+    overflow-y: auto;
+
+    padding-bottom: 12px;
+}
+
+.tab-panel {
+    display: none;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+/* On short windows the tab body is only a few hundred pixels tall
+   and Load Terrain scrolled out of sight behind the layer bar.
+   Pin it to the bottom of the scrolling area instead. */
+#loadTerrainBtn {
+    position: sticky;
+
+    bottom: 0;
+
+    z-index: 1;
+
+    box-shadow: 0 -8px 12px rgba(15, 15, 15, 0.94);
+}
+
+#loadTerrainBtn:disabled {
+    opacity: 1;
+
+    color: #888;
+}
+
+
+/* =========================================================
+   LAYER BAR (always visible)
+   ========================================================= */
+
+#layerBar {
+    flex: 0 0 auto;
+
+    padding: 8px 0 10px;
+
+    background: rgba(255, 255, 255, 0.04);
+
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+
+    border-radius: 0 0 10px 10px;
+}
+
+.layer-title {
+    margin: 0 12px 6px;
+
+    font-size: 10px;
+
+    letter-spacing: 0.08em;
+
+    text-transform: uppercase;
+
+    color: #888;
+}
+
+#layerBar .checkbox-row {
+    margin: 5px 12px;
+}
+
+button.ghost {
+    margin-top: 10px;
+
+    background: transparent;
+
+    border: 1px solid rgba(255, 255, 255, 0.2);
+
+    color: #bbb;
+
+    font-size: 12px;
+}
+
+button.ghost:hover {
+    background: rgba(255, 255, 255, 0.08);
+
+    color: white;
+}
+
+
+/* =========================================================
+   FACILITY LAYER CONTROLS
+   ========================================================= */
+
+.swatch {
+    display: inline-block;
+
+    width: 9px;
+    height: 9px;
+
+    margin-right: 6px;
+
+    border-radius: 2px;
+
+    vertical-align: baseline;
+}
+
+.layer-control {
+    margin-bottom: 12px;
+}
+
+.layer-groups {
+    margin-top: 3px;
+
+    font-size: 10px;
+
+    line-height: 1.35;
+
+    color: #777;
+
+    /* The full list is in the title attribute. */
+    cursor: help;
+}
+
+#facilityToggles {
+    margin: 6px 12px 0;
+}
+
+.toggle-grid-head,
+.toggle-grid-row {
+    display: grid;
+
+    grid-template-columns: 1fr 42px 58px;
+
+    align-items: center;
+
+    gap: 4px;
+}
+
+.toggle-grid-head {
+    margin-bottom: 3px;
+
+    font-size: 9px;
+
+    letter-spacing: 0.04em;
+
+    text-transform: uppercase;
+
+    color: #777;
+
+    text-align: center;
+}
+
+.toggle-grid-head span:first-child {
+    text-align: left;
+}
+
+.toggle-grid-row {
+    padding: 3px 0;
+
+    font-size: 13px;
+}
+
+.toggle-grid-row .layer-name {
+    display: flex;
+
+    align-items: center;
+
+    gap: 6px;
+
+    cursor: pointer;
+}
+
+.toggle-grid-row input[type="checkbox"] {
+    justify-self: center;
+
+    cursor: pointer;
+}
+
+
+/* =========================================================
+   TERRAIN FIELDS
+   ========================================================= */
+
+.field-row {
+    display: flex;
+
+    gap: 8px;
+
+    margin-bottom: 8px;
+}
+
+.field {
+    flex: 1;
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: 3px;
+
+    font-size: 11px;
+
+    color: #bbb;
+}
+
+.field input,
+.field select {
+    width: 100%;
+
+    box-sizing: border-box;
+
+    padding: 5px 6px;
+
+    font-size: 12px;
+
+    color: white;
+
+    background: #1c1c1c;
+
+    border: 1px solid rgba(255, 255, 255, 0.18);
+
+    border-radius: 4px;
+}
+
+.field input:focus,
+.field select:focus {
+    outline: none;
+
+    border-color: #00d9ff;
+}
+
+#scaleNote {
+    margin: 8px 12px 0;
+
+    font-size: 11px;
+
+    color: #7fd8ff;
+}
+
+
+/* =========================================================
+   CITY SEARCH DROPDOWN
+   ========================================================= */
+
+.city-dropdown {
+    margin-top: 4px;
+
+    max-height: 180px;
+
+    overflow-y: auto;
+
+    background: #1c1c1c;
+
+    border: 1px solid rgba(255, 255, 255, 0.18);
+
+    border-radius: 4px;
+}
+
+.city-dropdown.hidden {
+    display: none;
+}
+
+.city-option {
+    padding: 7px 9px;
+
+    font-size: 12px;
+
+    color: #ddd;
+
+    cursor: pointer;
+
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.city-option:last-child {
+    border-bottom: none;
+}
+
+.city-option:hover,
+.city-option.active {
+    background: rgba(0, 217, 255, 0.15);
+}
+
+.city-option .city-name {
+    display: block;
+}
+
+.city-option .city-detail {
+    display: block;
+
+    font-size: 10px;
+
+    color: #888;
+
+    margin-top: 1px;
+}
+
+.city-search-status {
+    padding: 7px 9px;
+
+    font-size: 11px;
+
+    color: #888;
+}
+
+
+/* =========================================================
+   BUTTONS
+   ========================================================= */
+
+button {
+    display: block;
+
+    width: calc(100% - 24px);
+
+    margin: 10px 12px 0;
+
+    padding: 8px;
+
+    border: none;
+
+    border-radius: 6px;
+
+    background: #333;
+
+    color: white;
+
+    cursor: pointer;
+}
+
+button:hover {
+    background: #444;
+}
+
+button:disabled {
+    opacity: 0.4;
+
+    cursor: not-allowed;
+}
+
+button:disabled:hover {
+    background: #333;
+}
+
+
+/* =========================================================
+   SECTION DIVIDER
+   ========================================================= */
+
+.section-divider {
+    margin: 14px 12px 2px;
+
+    padding-top: 10px;
+
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+
+    font-size: 11px;
+
+    letter-spacing: 0.08em;
+
+    text-transform: uppercase;
+
+    color: #ff8a8a;
+}
+
+
+/* =========================================================
+   HINTS + ROAD STATS
+   ========================================================= */
+
+.hint {
+    margin-top: 5px;
+
+    font-size: 10px;
+
+    line-height: 1.4;
+
+    color: #777;
+}
+
+.hint.indent {
+    margin: 2px 12px 8px 30px;
+}
+
+#roadStats {
+    margin: 12px;
+
+    padding: 9px 10px;
+
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+    font-size: 11px;
+
+    line-height: 1.6;
+
+    color: #cfe9ff;
+
+    white-space: pre-line;
+
+    background: rgba(255, 158, 61, 0.07);
+
+    border: 1px solid rgba(255, 158, 61, 0.25);
+
+    border-radius: 6px;
+}
+
+
+/* =========================================================
+   METRIC
+   ========================================================= */
+
+#metric {
+    margin: 12px;
+
+    padding: 10px;
+
+    background: rgba(255, 60, 60, 0.08);
+
+    border: 1px solid rgba(255, 60, 60, 0.25);
+
+    border-radius: 6px;
+}
+
+#metricLabel {
+    font-size: 10px;
+
+    letter-spacing: 0.08em;
+
+    text-transform: uppercase;
+
+    color: #ff8a8a;
+}
+
+#metricScore {
+    font-size: 26px;
+
+    font-weight: bold;
+
+    line-height: 1.2;
+
+    color: #fff;
+}
+
+#metricDetail {
+    margin-top: 4px;
+
+    font-size: 11px;
+
+    line-height: 1.45;
+
+    color: #aaa;
+
+    white-space: pre-line;
+}
+
+
+/* =========================================================
+   CHECKBOX
+   ========================================================= */
+
+.checkbox-row {
+    display: flex;
+
+    align-items: center;
+
+    gap: 7px;
+
+    margin: 12px;
+
+    font-size: 13px;
+}
+
+
+/* =========================================================
+   STATUS
+   ========================================================= */
+
+#status {
+    margin: 10px 12px 0;
+
+    font-size: 12px;
+
+    line-height: 1.4;
+
+    color: #aaa;
+}
+
+
+/* =========================================================
+   LOG PANEL
+   ========================================================= */
+
+#logPanel {
+    position: fixed;
+
+    right: 20px;
+    top: 20px;
+    bottom: 20px;
+
+    width: 260px;
+
+    z-index: 1000;
+
+    display: flex;
+    flex-direction: column;
+
+    background: rgba(15, 15, 15, 0.94);
+
+    color: white;
+
+    border: 1px solid rgba(255, 255, 255, 0.15);
+
+    border-radius: 10px;
+
+    box-shadow:
+        0 10px 35px rgba(0, 0, 0, 0.5);
+
+    user-select: none;
+}
+
+#logPanel-header {
+    height: 38px;
+
+    flex: 0 0 auto;
+
+    display: flex;
+
+    align-items: center;
+
+    padding: 0 12px;
+
+    font-weight: bold;
+
+    background: rgba(255, 255, 255, 0.06);
+
+    border-radius: 10px 10px 0 0;
+}
+
+#logList {
+    flex: 1 1 auto;
+
+    overflow-y: auto;
+
+    padding: 10px 12px;
+}
+
+.log-entry {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+    font-size: 11px;
+
+    line-height: 1.5;
+
+    color: #ccc;
+
+    padding: 3px 0;
+
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+
+    white-space: pre-wrap;
+
+    word-break: break-word;
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+.log-time {
+    color: #6fd3ff;
+
+    margin-right: 6px;
+}
+
+
+/* =========================================================
+   LAND COVER OVERLAY (ESA WorldCover)
+   ========================================================= */
+
+#landcoverCanvas {
+    image-rendering: pixelated;
+
+    position: absolute;
+
+    left: 0;
+    top: 0;
+
+    display: block;
+
+    pointer-events: none;
+
+    user-select: none;
+}
+
+.no-build-cell {
+    fill: url(#no-build-hatch);
+
+    stroke: rgba(0, 0, 0, 0.5);
+    stroke-width: 1;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+
+/* =========================================================
+   LAND COVER LEGEND
+   ========================================================= */
+
+#landCoverLegend {
+    position: fixed;
+
+    left: 20px;
+    bottom: 20px;
+
+    width: 230px;
+
+    z-index: 1000;
+
+    background: rgba(15, 15, 15, 0.94);
+
+    color: white;
+
+    border: 1px solid rgba(255, 255, 255, 0.15);
+
+    border-radius: 10px;
+
+    box-shadow:
+        0 10px 35px rgba(0, 0, 0, 0.5);
+
+    user-select: none;
+}
+
+#landCoverLegend.hidden {
+    display: none;
+}
+
+#landCoverLegend-header {
+    height: 34px;
+
+    display: flex;
+
+    align-items: center;
+
+    padding: 0 12px;
+
+    font-weight: bold;
+    font-size: 13px;
+
+    background: rgba(255, 255, 255, 0.06);
+
+    border-radius: 10px 10px 0 0;
+}
+
+#landCoverLegendList {
+    padding: 8px 12px;
+}
+
+.legend-row {
+    display: flex;
+
+    align-items: center;
+
+    gap: 7px;
+
+    font-size: 12px;
+
+    color: #ddd;
+
+    padding: 2px 0;
+}
+
+.legend-swatch {
+    display: inline-block;
+
+    width: 11px;
+    height: 11px;
+
+    border-radius: 2px;
+
+    flex: 0 0 auto;
+}
+
+#landCoverAttribution {
+    padding: 0 12px 10px;
+
+    font-size: 10px;
+
+    line-height: 1.4;
+
+    color: #777;
+}
+
+
+/* =========================================================
+   LAND COVER - legend detail, tooltip, file button
+   ========================================================= */
+
+.legend-name { flex: 1; }
+
+.legend-pct {
+    color: #888;
+    font-size: 11px;
+}
+
+.legend-flag {
+    width: 10px;
+    color: #ff7a7a;
+    font-size: 10px;
+}
+
+#landCoverLegend {
+    width: 260px;
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+#landCoverTip {
+    position: fixed;
+    z-index: 1100;
+    pointer-events: none;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: white;
+    background: rgba(10, 10, 10, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 5px;
+    white-space: nowrap;
+}
+
+#landCoverTip.hidden { display: none; }
+
+.file-btn {
+    display: block;
+    margin: 8px 12px 0;
+    padding: 7px;
+    text-align: center;
+    font-size: 12px;
+    color: #ddd;
+    background: #2a2a2a;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.file-btn:hover { background: #3a3a3a; }
+
+#layerBar .checkbox-row.sub { padding-left: 22px; }
+
+
+/* =========================================================
+   SELECTABLE TEXT (logs, status, notes) + copy button
+   ========================================================= */
+
+#logList,
+#logList .log-entry,
+#status,
+#scaleNote,
+#landCoverNote,
+#roadStats,
+#metricDetail {
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+}
+
+#logPanel-header {
+    justify-content: space-between;
+}
+
+#copyLogBtn {
+    width: auto;
+    margin: 0;
+    padding: 3px 9px;
+    font-size: 11px;
+}
