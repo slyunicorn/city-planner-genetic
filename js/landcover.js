@@ -428,16 +428,35 @@ async function fetchLandCoverServer(bbox, cols, rows, isCurrent) {
 
     const q = new URLSearchParams({ west, south, east, north });
 
+    // Say which page origin was asked, so a tab opened from file://
+    // or from another static server is obvious from the message.
+    const origin =
+        location.protocol === "file:" ? "file://" : location.origin;
+
+    if (location.protocol === "file:") {
+        throw new Error(
+            "page opened as file:// - open http://localhost:8000/ " +
+            "(tools/serve.py) instead"
+        );
+    }
+
     let res;
 
     try {
-        res = await fetchWithTimeout(`/api/landcover/start?${q}`, {}, 5000);
+        res = await fetchWithTimeout(`/api/landcover/start?${q}`, {}, 15000);
     } catch (err) {
-        throw new Error("not running (start it with tools/serve.py)");
+        throw new Error(
+            `no answer from ${origin}/api (${err.message}) - ` +
+            "is tools/serve.py running?"
+        );
     }
 
     if (res.status === 404 || res.status === 501) {
-        throw new Error("not running (start it with tools/serve.py)");
+        throw new Error(
+            `${origin} has no /api (HTTP ${res.status}) - this page is ` +
+            "served by something other than tools/serve.py; open " +
+            "http://localhost:8000/"
+        );
     }
 
     const start = await res.json();
