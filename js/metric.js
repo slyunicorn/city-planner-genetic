@@ -197,7 +197,7 @@ function metresLabel(px) {
 const CENTROID_PULL = 0.5;
 const BALANCE_PULL = 0.35;
 
-function runLayerEpoch(layer, cityPolygon) {
+function runLayerEpoch(layer, cityPolygon, density) {
 
     if (layer.points.length < 2) {
         return false;
@@ -284,12 +284,18 @@ function runLayerEpoch(layer, cityPolygon) {
         const nextY =
             facility.y + moveY * layer.stepScale;
 
-        // Facilities must stay inside the city AND on land.
+        // Facilities must stay inside the city AND on land,
+        // and denseOnly layers inside the high-density parts.
         const insideCity =
             !cityPolygon.length ||
             d3.polygonContains(cityPolygon, [nextX, nextY]);
 
-        if (insideCity && isLand(nextX, nextY)) {
+        const denseEnough =
+            !layer.denseOnly ||
+            !density ||
+            density.isDense(nextX, nextY);
+
+        if (insideCity && denseEnough && isLand(nextX, nextY)) {
             facility.x = nextX;
             facility.y = nextY;
         }
@@ -325,11 +331,16 @@ function runEpoch() {
         getBoundaryPolygonPoints(200)
             .map(q => [q.x, q.y]);
 
+    // Blocks don't move while optimising, but rebuilding per
+    // epoch keeps it right if relaxation ran in between.
+    const density =
+        buildDensityField();
+
     let improvedAny = false;
 
     for (const layer of FACILITY_LAYERS) {
 
-        if (runLayerEpoch(layer, cityPolygon)) {
+        if (runLayerEpoch(layer, cityPolygon, density)) {
             improvedAny = true;
         }
     }

@@ -42,6 +42,9 @@ const FACILITY_LAYERS = [
         color: "#FF3B3B",
         fill: "rgba(255, 60, 60, 0.06)",
         spacing: 140,
+        // Only allowed where the blocks are dense (see
+        // buildDensityField() in facilities.js).
+        denseOnly: true,
         groups: [
             "Medical rescue",
             "Firefighters",
@@ -64,6 +67,7 @@ const FACILITY_LAYERS = [
         color: "#FFC93C",
         fill: "rgba(255, 201, 60, 0.06)",
         spacing: 90,
+        denseOnly: true,
         groups: [
             "Sustenance",
             "Education",
@@ -90,6 +94,7 @@ const FACILITY_LAYERS = [
         color: "#B36BFF",
         fill: "rgba(179, 107, 255, 0.06)",
         spacing: 55,
+        denseOnly: false,
         groups: [
             "Food, beverages",
             "General store, department store, mall",

@@ -4,12 +4,131 @@
 // so load order in index.html matters.
 
 // ============================================================
+// BLOCK DENSITY FIELD
+// ============================================================
+//
+// "Density" at a spot = how many block points lie within
+// DENSITY_RADIUS_FACTOR * R of it (R = block Poisson spacing).
+// The blocks are the city's demand, and relaxation crowds them
+// onto flat, low ground, so this is where the city is densest.
+//
+// A spot counts as high density when its count is at least
+// DENSE_FACTOR times what an evenly spread city would give
+// there: blocks / cityArea * pi * radius^2. (A percentile over
+// the blocks would not work: it is weighted by the blocks, so
+// a big sparse suburb drags it down until everything passes.)
+// Layers with `denseOnly` (Emergency, Amenity) may only be
+// placed or moved onto such spots.
+//
+// Counting uses a grid of buckets one radius wide, so a lookup
+// only scans the 3 x 3 buckets around the spot.
+// ============================================================
+
+const DENSITY_RADIUS_FACTOR = 2.5;
+const DENSE_FACTOR = 1.0;
+
+function buildDensityField() {
+
+    const blocks =
+        getInsideCityPoints();
+
+    // Too few blocks to say where the city is dense.
+    if (blocks.length < 10) {
+        return null;
+    }
+
+    const radius =
+        Math.max(1, R * DENSITY_RADIUS_FACTOR);
+
+    const radius2 = radius * radius;
+
+    const cityArea =
+        Math.abs(
+            d3.polygonArea(
+                getBoundaryPolygonPoints(200)
+                    .map(q => [q.x, q.y])
+            )
+        );
+
+    if (!(cityArea > 0)) {
+        return null;
+    }
+
+    const bucketKey = (bx, by) => by * 65536 + bx;
+
+    const buckets = new Map();
+
+    for (const p of blocks) {
+
+        const key =
+            bucketKey(
+                Math.floor(p.x / radius),
+                Math.floor(p.y / radius)
+            );
+
+        if (!buckets.has(key)) {
+            buckets.set(key, []);
+        }
+
+        buckets.get(key).push(p);
+    }
+
+    function densityAt(x, y) {
+
+        const bx = Math.floor(x / radius);
+        const by = Math.floor(y / radius);
+
+        let count = 0;
+
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+
+                const bucket =
+                    buckets.get(bucketKey(bx + dx, by + dy));
+
+                if (!bucket) {
+                    continue;
+                }
+
+                for (const p of bucket) {
+
+                    const ddx = p.x - x;
+                    const ddy = p.y - y;
+
+                    if (ddx * ddx + ddy * ddy <= radius2) {
+                        count++;
+                    }
+                }
+            }
+        }
+
+        return count;
+    }
+
+    const threshold =
+        Math.ceil(
+            DENSE_FACTOR *
+            blocks.length / cityArea *
+            Math.PI * radius2
+        );
+
+    return {
+        radius,
+        threshold,
+        densityAt,
+        isDense: (x, y) => densityAt(x, y) >= threshold
+    };
+}
+
+
+// ============================================================
 // PLACE FACILITIES
 // ============================================================
 //
 // Each of the three layers gets its own Poisson-disc pass at
 // its own spacing, then the same city + land filtering the
-// block layer uses.
+// block layer uses. `denseOnly` layers additionally drop sites
+// outside the high-density parts of the city.
 // ============================================================
 
 function placeFacilities() {
@@ -28,7 +147,12 @@ function placeFacilities() {
         getBoundaryPolygonPoints(200)
             .map(q => [q.x, q.y]);
 
+    const density =
+        buildDensityField();
+
     const summary = [];
+
+    let totalSparse = 0;
 
     for (const layer of FACILITY_LAYERS) {
 
@@ -54,11 +178,18 @@ function placeFacilities() {
                 );
 
         // A facility can no more sit in the ocean than a block.
-        layer.points =
+        const onLand =
             inCity.filter(p => isLand(p.x, p.y));
 
         layer.drowned =
-            inCity.length - layer.points.length;
+            inCity.length - onLand.length;
+
+        layer.points =
+            layer.denseOnly && density
+                ? onLand.filter(p => density.isDense(p.x, p.y))
+                : onLand;
+
+        totalSparse += onLand.length - layer.points.length;
 
         layer.stepScale = 1;
 
@@ -85,6 +216,15 @@ function placeFacilities() {
             ? `; rejected ${totalDrowned} below ${seaLevelM} m.`
             : ".")
     );
+
+    if (density) {
+        logStep(
+            `Emergency/Amenity limited to high-density blocks ` +
+            `(≥ ${density.threshold} blocks within ` +
+            `${Math.round(density.radius)} px); ` +
+            `rejected ${totalSparse} low-density sites.`
+        );
+    }
 
     status.textContent =
         `${totalFacilityCount()} facilities placed across ` +
