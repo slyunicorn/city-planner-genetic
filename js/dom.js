@@ -61,6 +61,7 @@ const seaLevelInput = document.getElementById("seaLevelInput");
 const sobelToggle = document.getElementById("sobelToggle");
 const voronoiToggle = document.getElementById("voronoiToggle");
 const urquhartToggle = document.getElementById("urquhartToggle");
+const hidePointsToggle = document.getElementById("hidePointsToggle");
 const extraEdgeSlider = document.getElementById("extraEdgeSlider");
 const extraEdgeValue = document.getElementById("extraEdgeValue");
 const pruneToggle = document.getElementById("pruneToggle");

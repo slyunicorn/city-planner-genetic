@@ -1,5 +1,5 @@
 // js/ui-panels.js
-// Tabs, draggable control panel, window resize.
+// Tabs, draggable panels (controls, land cover legend), window resize.
 // Plain script: shares the global scope with the other js/ files,
 // so load order in index.html matters.
 
@@ -40,8 +40,76 @@ tabButtons.forEach(b =>
 
 
 // ============================================================
-// DRAGGABLE CONTROLS
+// DRAGGABLE PANELS
 // ============================================================
+
+// Drag `panel` by pressing on `handle` (its header bar).
+function makeDraggable(panel, handle) {
+
+    let dragging = false;
+
+    let offsetX = 0;
+    let offsetY = 0;
+
+
+    handle.addEventListener(
+        "pointerdown",
+        event => {
+
+            dragging = true;
+
+
+            const rect =
+                panel.getBoundingClientRect();
+
+
+            offsetX =
+                event.clientX - rect.left;
+
+            offsetY =
+                event.clientY - rect.top;
+
+
+            handle.setPointerCapture(
+                event.pointerId
+            );
+        }
+    );
+
+
+    handle.addEventListener(
+        "pointermove",
+        event => {
+
+            if (!dragging) {
+                return;
+            }
+
+
+            panel.style.left =
+                `${event.clientX - offsetX}px`;
+
+
+            panel.style.top =
+                `${event.clientY - offsetY}px`;
+
+
+            // The legend is anchored by `bottom` in CSS
+            // in some layouts; once moved, `top` rules.
+            panel.style.bottom = "auto";
+        }
+    );
+
+
+    handle.addEventListener(
+        "pointerup",
+        () => {
+
+            dragging = false;
+        }
+    );
+}
+
 
 const controls =
     document.getElementById("controls");
@@ -49,63 +117,12 @@ const controls =
 const controlsHeader =
     document.getElementById("controls-header");
 
-
-let draggingControls = false;
-
-let controlsOffsetX = 0;
-let controlsOffsetY = 0;
+makeDraggable(controls, controlsHeader);
 
 
-controlsHeader.addEventListener(
-    "pointerdown",
-    event => {
-
-        draggingControls = true;
-
-
-        const rect =
-            controls.getBoundingClientRect();
-
-
-        controlsOffsetX =
-            event.clientX - rect.left;
-
-        controlsOffsetY =
-            event.clientY - rect.top;
-
-
-        controlsHeader.setPointerCapture(
-            event.pointerId
-        );
-    }
-);
-
-
-controlsHeader.addEventListener(
-    "pointermove",
-    event => {
-
-        if (!draggingControls) {
-            return;
-        }
-
-
-        controls.style.left =
-            `${event.clientX - controlsOffsetX}px`;
-
-
-        controls.style.top =
-            `${event.clientY - controlsOffsetY}px`;
-    }
-);
-
-
-controlsHeader.addEventListener(
-    "pointerup",
-    () => {
-
-        draggingControls = false;
-    }
+makeDraggable(
+    document.getElementById("landCoverLegend"),
+    document.getElementById("landCoverLegend-header")
 );
 
 

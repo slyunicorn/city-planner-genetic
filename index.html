@@ -432,6 +432,11 @@
         </label>
 
         <label class="checkbox-row">
+            <input id="hidePointsToggle" type="checkbox">
+            Hide all points (graph only)
+        </label>
+
+        <label class="checkbox-row">
             <input id="landCoverToggle" type="checkbox" checked>
             Land Cover Mask
         </label>
@@ -470,7 +475,8 @@
 <div id="landCoverLegend" class="hidden">
 
     <div id="landCoverLegend-header">
-        Uninhabitable land
+        <span>Uninhabitable land</span>
+        <span class="drag-hint">⠿</span>
     </div>
 
     <div id="landCoverLegendList"></div>

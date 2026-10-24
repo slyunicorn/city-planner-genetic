@@ -105,6 +105,17 @@ body {
 }
 
 
+/* "Hide all points (graph only)" toggle */
+#viz.hide-points .sample-point,
+#viz.hide-points .city-point,
+#viz.hide-points .boundary-vertex,
+#viz.hide-points .building-point,
+#viz.hide-points .road-junction,
+#viz.hide-points .facility-point {
+    display: none;
+}
+
+
 /* =========================================================
    CITY BOUNDARY
    ========================================================= */
@@ -1000,8 +1011,11 @@ button:disabled:hover {
 #landCoverLegend {
     position: fixed;
 
-    left: 20px;
-    bottom: 20px;
+    /* Starts beside the City Planner panel
+       (#controls: left 20px + width 250px + 10px gap);
+       draggable by its header (js/ui-panels.js). */
+    left: 280px;
+    top: 20px;
 
     width: 230px;
 
@@ -1026,20 +1040,40 @@ button:disabled:hover {
 }
 
 #landCoverLegend-header {
+    /* The legend scrolls as a whole; keep the drag
+       handle visible while it does. */
+    position: sticky;
+    top: 0;
+    z-index: 1;
+
     height: 34px;
 
     display: flex;
 
     align-items: center;
 
+    justify-content: space-between;
+
+    cursor: grab;
+
     padding: 0 12px;
 
     font-weight: bold;
     font-size: 13px;
 
-    background: rgba(255, 255, 255, 0.06);
+    /* Opaque, so scrolled rows don't show through
+       the sticky header. */
+    background: #1e1e1e;
 
     border-radius: 10px 10px 0 0;
+}
+
+#landCoverLegend-header:active {
+    cursor: grabbing;
+}
+
+#landCoverLegend-header .drag-hint {
+    opacity: 0.5;
 }
 
 #landCoverLegendList {

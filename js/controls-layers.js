@@ -28,6 +28,25 @@ urquhartToggle.addEventListener(
 );
 
 
+// Pure view switch: a class on the SVG hides every point layer
+// (blocks, cell corners, junctions, facilities, boundary vertices)
+// so only the edges of the optimised network stay visible. CSS
+// does the hiding, so redraws, zoom and optimisation are unaffected.
+hidePointsToggle.addEventListener(
+    "change",
+    () => {
+
+        svg.classed("hide-points", hidePointsToggle.checked);
+
+        logStep(
+            hidePointsToggle.checked
+                ? "All points hidden; showing the network only."
+                : "Points shown."
+        );
+    }
+);
+
+
 sobelToggle.addEventListener(
     "change",
     () => {
