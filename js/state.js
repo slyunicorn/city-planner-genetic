@@ -52,9 +52,16 @@ let K = Number(kSlider.value);
 // and throw.
 let roadNetworkDirty = true;
 
+// Buildings are the LAST step: they appear only once a Simplify
+// run has picked its final network, smoothed it and classified
+// its roads, and disappear again as soon as anything the network
+// depends on changes.
+let buildingsReady = false;
+
 
 function invalidateRoadNetwork() {
     roadNetworkDirty = true;
+    buildingsReady = false;
 }
 
 

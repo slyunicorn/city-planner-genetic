@@ -13,6 +13,26 @@ straightenSlider.addEventListener(
 );
 
 
+mainShareSlider.addEventListener(
+    "input",
+    () => {
+
+        mainShareValue.textContent =
+            mainShareSlider.value;
+    }
+);
+
+
+mainTurnSlider.addEventListener(
+    "input",
+    () => {
+
+        mainTurnValue.textContent =
+            mainTurnSlider.value;
+    }
+);
+
+
 attemptsSlider.addEventListener(
     "input",
     () => {

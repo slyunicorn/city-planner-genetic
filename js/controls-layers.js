@@ -28,6 +28,23 @@ urquhartToggle.addEventListener(
 );
 
 
+buildingsToggle.addEventListener(
+    "change",
+    () => {
+
+        drawBuildings();
+
+        logStep(
+            !buildingsToggle.checked
+                ? "Buildings hidden."
+                : buildingsReady
+                    ? `Buildings shown (${shownBuildingCount}).`
+                    : "Buildings appear once Simplify Network has finished."
+        );
+    }
+);
+
+
 // Pure view switch: a class on the SVG hides every point layer
 // (blocks, cell corners, junctions, facilities, boundary vertices)
 // so only the edges of the optimised network stay visible. CSS

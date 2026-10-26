@@ -150,9 +150,16 @@ function placeFacilities() {
     const density =
         buildDensityField();
 
+    // Facilities only go in buildable blocks: never in a block
+    // that is mostly water, forest, steep ground, ... (the
+    // hatched ones), even if their exact spot is dry.
+    const blocks =
+        getBlockCells();
+
     const summary = [];
 
     let totalSparse = 0;
+    let totalBadBlock = 0;
 
     for (const layer of FACILITY_LAYERS) {
 
@@ -178,11 +185,18 @@ function placeFacilities() {
                 );
 
         // A facility can no more sit in the ocean than a block.
-        const onLand =
+        const dry =
             inCity.filter(p => isLand(p.x, p.y));
 
         layer.drowned =
-            inCity.length - onLand.length;
+            inCity.length - dry.length;
+
+        const onLand =
+            blocks
+                ? dry.filter(p => blocks.isBuildableAt(p.x, p.y))
+                : dry;
+
+        totalBadBlock += dry.length - onLand.length;
 
         layer.points =
             layer.denseOnly && density
@@ -216,6 +230,13 @@ function placeFacilities() {
             ? `; rejected ${totalDrowned} below ${seaLevelM} m.`
             : ".")
     );
+
+    if (totalBadBlock > 0) {
+        logStep(
+            `Rejected ${totalBadBlock} facility sites in ` +
+            `unbuildable blocks.`
+        );
+    }
 
     if (density) {
         logStep(

@@ -45,6 +45,12 @@ function draw() {
 // matches what's drawn, exactly.
 // ============================================================
 
+// Last sampling, keyed by the path string itself, so dragging a
+// vertex (or any other boundary change) misses the cache by
+// construction. Relaxation and the road build ask for this many
+// times per frame; building a detached <path> each time is slow.
+let boundarySampleCache = null;
+
 function getBoundaryPolygonPoints(samples = 200) {
 
     if (boundaryPoints.length < 3) {
@@ -56,6 +62,14 @@ function getBoundaryPolygonPoints(samples = 200) {
 
     if (!pathData) {
         return [];
+    }
+
+    if (
+        boundarySampleCache &&
+        boundarySampleCache.pathData === pathData &&
+        boundarySampleCache.samples === samples
+    ) {
+        return boundarySampleCache.points;
     }
 
     const tempPath =
@@ -90,7 +104,99 @@ function getBoundaryPolygonPoints(samples = 200) {
         });
     }
 
+    boundarySampleCache = { pathData, samples, points: result };
+
     return result;
+}
+
+
+// ============================================================
+// CLIP A POLYGON TO A CONVEX ONE (Sutherland-Hodgman)
+// ============================================================
+//
+// subject: any simple polygon, e.g. the (possibly concave) city
+// boundary. clip: a CONVEX polygon, e.g. one Voronoi cell. Both
+// are arrays of [x, y]; a repeated closing vertex is fine.
+// Returns subject ∩ clip as [x, y] vertices.
+//
+// With a concave subject the result can contain zero-width
+// "bridges" along a clip edge where the city leaves the cell and
+// comes back. They add no area, and they are rare (only cells
+// straddling a notch of the boundary).
+// ============================================================
+
+function clipPolygonToConvex(subject, clip) {
+
+    const ring = clip.slice();
+
+    if (
+        ring.length > 1 &&
+        ring[0][0] === ring[ring.length - 1][0] &&
+        ring[0][1] === ring[ring.length - 1][1]
+    ) {
+        ring.pop();
+    }
+
+    if (ring.length < 3) {
+        return [];
+    }
+
+    // Orientation-agnostic "inside": same side as the clip
+    // polygon's own winding. d3.polygonArea's sign is the
+    // NEGATIVE of the usual shoelace (it is positive for a ring
+    // that is counterclockwise on a y-down screen), so a
+    // positive d3 area means the interior is where the cross
+    // product below is negative.
+    const winding =
+        d3.polygonArea(ring) >= 0 ? -1 : 1;
+
+    let output = subject;
+
+    for (let i = 0; i < ring.length && output.length; i++) {
+
+        const a = ring[i];
+        const b = ring[(i + 1) % ring.length];
+
+        const side = p =>
+            winding *
+            ((b[0] - a[0]) * (p[1] - a[1]) -
+             (b[1] - a[1]) * (p[0] - a[0]));
+
+        const input = output;
+        output = [];
+
+        for (let j = 0; j < input.length; j++) {
+
+            const cur = input[j];
+            const prev = input[(j + input.length - 1) % input.length];
+
+            const sCur = side(cur);
+            const sPrev = side(prev);
+
+            if (sCur >= 0) {
+
+                if (sPrev < 0) {
+                    const t = sPrev / (sPrev - sCur);
+                    output.push([
+                        prev[0] + (cur[0] - prev[0]) * t,
+                        prev[1] + (cur[1] - prev[1]) * t
+                    ]);
+                }
+
+                output.push(cur);
+
+            } else if (sPrev >= 0) {
+
+                const t = sPrev / (sPrev - sCur);
+                output.push([
+                    prev[0] + (cur[0] - prev[0]) * t,
+                    prev[1] + (cur[1] - prev[1]) * t
+                ]);
+            }
+        }
+    }
+
+    return output;
 }
 
 function getInsideCityPoints() {
@@ -147,7 +253,15 @@ function getVoronoiExtent() {
         let maxX = -Infinity;
         let maxY = -Infinity;
 
-        for (const p of boundaryPoints) {
+        // The box of the DRAWN curve, not of the clicked vertices:
+        // the spline bulges past its vertices (by tens of pixels
+        // with only a few clicks), and any city point in a bulge
+        // outside the box got no Voronoi cell - so it never
+        // relaxed and no road was built around it.
+        const curve =
+            getBoundaryPolygonPoints(200);
+
+        for (const p of curve.length ? curve : boundaryPoints) {
 
             minX = Math.min(minX, p.x);
             minY = Math.min(minY, p.y);
@@ -395,6 +509,27 @@ function drawBoundary() {
 
                         if (cityClosed) {
                             drawVoronoi();
+                        }
+                    }
+                )
+
+                // The city changed shape: which points count, the
+                // cells, the roads and the facility metric all
+                // follow from it. Done once on release rather than
+                // on every mouse move.
+                .on(
+                    "end",
+                    function() {
+
+                        if (!cityClosed) {
+                            return;
+                        }
+
+                        invalidateRoadNetwork();
+                        draw();
+
+                        if (currentMetric) {
+                            evaluateMetric();
                         }
                     }
                 )

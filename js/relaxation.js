@@ -203,6 +203,15 @@ function relaxPoints() {
             getVoronoiExtent()
         );
 
+    // Cells are clipped to the city before their centroid is
+    // taken. Unclipped, an edge cell reaches out to the bounding
+    // box (and into any notch of a concave boundary), its
+    // centroid lies outside the city, and relaxation walks the
+    // point out of the city, where it silently stops counting.
+    const cityPolygon =
+        getBoundaryPolygonPoints(200)
+            .map(q => [q.x, q.y]);
+
     // --------------------------------------------------------
     // LERP each point toward its cell's fake centroid. That
     // centroid is already colour-steered - getFakeCentroid()
@@ -219,12 +228,20 @@ function relaxPoints() {
 
     for (let i = 0; i < insidePoints.length; i++) {
 
-        const polygon =
+        const cell =
             voronoi.cellPolygon(i);
 
-        if (!polygon || polygon.length < 3) {
+        if (!cell || cell.length < 3) {
             continue;
         }
+
+        const clipped =
+            cityPolygon.length
+                ? clipPolygonToConvex(cityPolygon, cell)
+                : cell;
+
+        const polygon =
+            clipped.length >= 3 ? clipped : cell;
 
         const centroid =
             getFakeCentroid(polygon);
@@ -236,33 +253,43 @@ function relaxPoints() {
         const point =
             insidePoints[i];
 
-        point.x =
-            point.x +
-            (centroid.x - point.x) *
-            LERP_AMOUNT;
-
-        point.y =
-            point.y +
-            (centroid.y - point.y) *
-            LERP_AMOUNT;
-
-        point.x =
+        const nextX =
             Math.max(
                 0,
-                Math.min(WORLD_WIDTH, point.x)
+                Math.min(
+                    WORLD_WIDTH,
+                    point.x + (centroid.x - point.x) * LERP_AMOUNT
+                )
             );
 
-        point.y =
+        const nextY =
             Math.max(
                 0,
-                Math.min(WORLD_HEIGHT, point.y)
+                Math.min(
+                    WORLD_HEIGHT,
+                    point.y + (centroid.y - point.y) * LERP_AMOUNT
+                )
             );
+
+        // A block may not relax out of the city or onto ground
+        // it could not be built on; it stays put instead.
+        if (
+            (cityPolygon.length &&
+                !d3.polygonContains(cityPolygon, [nextX, nextY])) ||
+            !isLand(nextX, nextY)
+        ) {
+            continue;
+        }
+
+        point.x = nextX;
+        point.y = nextY;
     }
 
     invalidateRoadNetwork();
 
     drawPoints();
     drawVoronoi();
+    drawLandCoverCells();
     drawUrquhart();
 }
 

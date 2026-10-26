@@ -24,6 +24,7 @@ const facilityVoronoiLayer = d3.select("#facilityVoronoiLayer");
 const facilityPointLayer = d3.select("#facilityPointLayer");
 const vertexLayer = d3.select("#vertexLayer");
 const landCoverCellLayer = d3.select("#landCoverCellLayer");
+const buildingLayer = d3.select("#buildingLayer");
 
 const cityClipPath = d3.select("#cityClipPath");
 
@@ -62,6 +63,7 @@ const sobelToggle = document.getElementById("sobelToggle");
 const voronoiToggle = document.getElementById("voronoiToggle");
 const urquhartToggle = document.getElementById("urquhartToggle");
 const hidePointsToggle = document.getElementById("hidePointsToggle");
+const buildingsToggle = document.getElementById("buildingsToggle");
 const extraEdgeSlider = document.getElementById("extraEdgeSlider");
 const extraEdgeValue = document.getElementById("extraEdgeValue");
 const pruneToggle = document.getElementById("pruneToggle");
@@ -70,6 +72,10 @@ const facilityLinkValue = document.getElementById("facilityLinkValue");
 const roadStats = document.getElementById("roadStats");
 const straightenSlider = document.getElementById("straightenSlider");
 const straightenValue = document.getElementById("straightenValue");
+const mainShareSlider = document.getElementById("mainShareSlider");
+const mainShareValue = document.getElementById("mainShareValue");
+const mainTurnSlider = document.getElementById("mainTurnSlider");
+const mainTurnValue = document.getElementById("mainTurnValue");
 const attemptsSlider = document.getElementById("attemptsSlider");
 const attemptsValue = document.getElementById("attemptsValue");
 const speedSlider = document.getElementById("speedSlider");

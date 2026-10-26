@@ -186,6 +186,120 @@ body {
     pointer-events: none;
 }
 
+/* A road kept across open water (sea, river, lake). Hot pink:
+   no other layer uses it, and it stands out on the blue water
+   overlay and next to the light-yellow road points. */
+.road-bridge {
+    fill: none;
+
+    stroke: #ff4fb4;
+    stroke-width: 3;
+    stroke-linecap: butt;
+
+    vector-effect: non-scaling-stroke;
+
+    filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9));
+
+    pointer-events: none;
+}
+
+/* A road kept across other unbuildable ground (forest, steep,
+   wetland, riverbank buffer): an ordinary road, dashed. */
+.road-offland {
+    fill: none;
+
+    stroke: #ff9e3d;
+    stroke-width: 1.4;
+    stroke-dasharray: 3 2;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+/* After the final network is classified: main roads wide and
+   bright, smaller roads thinner. */
+.road-main {
+    fill: none;
+
+    stroke: #f2f2f2;
+    stroke-width: 3.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+.road-main.road-offland {
+    stroke-dasharray: 6 3;
+}
+
+.urquhart-edge.minor,
+.road-offland.minor {
+    stroke-width: 1;
+}
+
+/* Building footprints, one per buildable block. */
+.building {
+    fill: #9a9a9a;
+    fill-opacity: 0.92;
+
+    stroke: #5c5c5c;
+    stroke-width: 0.6;
+
+    vector-effect: non-scaling-stroke;
+
+    pointer-events: none;
+}
+
+.road-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+
+    margin-top: 8px;
+
+    font-size: 11px;
+    color: #aaa;
+}
+
+.road-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.road-key {
+    display: inline-block;
+
+    width: 16px;
+    height: 0;
+
+    border-top: 1px solid #ff9e3d;
+}
+
+.road-key.main {
+    border-top: 3px solid #f2f2f2;
+}
+
+.road-key.bridge {
+    border-top: 3px solid #ff4fb4;
+}
+
+.road-key.offland {
+    border-top: 2px dashed #ff9e3d;
+}
+
+.road-key.building {
+    width: 10px;
+    height: 8px;
+
+    border: 1px solid #5c5c5c;
+    background: #9a9a9a;
+}
+
 .road-junction {
     fill: #fff1b8;
 

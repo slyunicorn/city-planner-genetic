@@ -28,6 +28,7 @@
 
             <g id="voronoiLayer"></g>
             <g id="landCoverCellLayer"></g>
+            <g id="buildingLayer"></g>
             <g id="urquhartLayer"></g>
             <g id="boundaryLayer"></g>
             <g id="pointLayer"></g>
@@ -391,6 +392,40 @@
                 </div>
             </div>
 
+            <div class="control-section">
+                <label>
+                    <span>Main road share</span>
+                    <span><span id="mainShareValue">30</span>%</span>
+                </label>
+
+                <input id="mainShareSlider" type="range" min="5" max="70" value="30">
+
+                <div class="hint">
+                    After the final network is picked and smoothed,
+                    roads are traced into long chains that carry on
+                    through junctions along the straightest branch.
+                    The longest chains, together this share of all
+                    road length, become main roads; the rest are
+                    smaller roads.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Straighten main-road turns under</span>
+                    <span><span id="mainTurnValue">25</span>°</span>
+                </label>
+
+                <input id="mainTurnSlider" type="range" min="0" max="60" value="25">
+
+                <div class="hint">
+                    Along each main road, a turn gentler than this is
+                    pulled straighter; a sharper turn is kept as a
+                    real corner. 0 turns it off. Applies on the next
+                    Simplify run.
+                </div>
+            </div>
+
             <button id="simplifyBtn">
                 Simplify Network
             </button>
@@ -402,6 +437,14 @@
             </div>
 
             <div id="roadStats">Enable the Building Network layer to measure.</div>
+
+            <div class="road-legend">
+                <span><i class="road-key main"></i>Main road</span>
+                <span><i class="road-key road"></i>Smaller road</span>
+                <span><i class="road-key bridge"></i>Bridge over water</span>
+                <span><i class="road-key offland"></i>Road over forest / steep / other unbuildable</span>
+                <span><i class="road-key building"></i>Building</span>
+            </div>
 
         </section>
 
@@ -429,6 +472,11 @@
         <label class="checkbox-row">
             <input id="urquhartToggle" type="checkbox">
             Building Network (Urquhart)
+        </label>
+
+        <label class="checkbox-row">
+            <input id="buildingsToggle" type="checkbox" checked>
+            Buildings
         </label>
 
         <label class="checkbox-row">
@@ -508,9 +556,11 @@
 <script src="js/roads-junctions.js"></script>
 <script src="js/roads-stepwise.js"></script>
 <script src="js/roads-straighten.js"></script>
+<script src="js/roads-hierarchy.js"></script>
 <script src="js/roads-animated.js"></script>
 <script src="js/voronoi-draw.js"></script>
 <script src="js/relaxation.js"></script>
+<script src="js/buildings.js"></script>
 <script src="js/facilities.js"></script>
 <script src="js/metric.js"></script>
 <script src="js/city-close.js"></script>

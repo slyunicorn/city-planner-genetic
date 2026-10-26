@@ -204,6 +204,193 @@ function pruneDeadEnds(nodes, edges) {
 
 
 // ------------------------------------------------------------
+// 4. Roads over unbuildable ground -> removed, or bridges
+// ------------------------------------------------------------
+//
+// Every road node is on buildable land, but the straight road
+// between two of them can still pass over a river, a lake, a
+// forest or a cliff. Each such road is either removed or kept:
+//
+//   - kept, by chance, with probability BRIDGE_KEEP_CHANCE
+//   - kept anyway when removing it would cut the network in two
+//     (the only road across the river)
+//   - removed otherwise
+//
+// A kept road is then classified by what it crosses:
+//
+//   - any open water (isWaterAt: sea, river, lake)  -> BRIDGE
+//   - only other unbuildable ground (forest, steep, wetland,
+//     riverbank buffer, ...)                        -> "off-land"
+//     road, drawn dashed; it is not a bridge
+//
+// The "chance" is a hash of the road's endpoints rather than
+// Math.random(), so the same road gets the same answer on every
+// rebuild (relaxation and zoom redraw constantly) and bridges do
+// not flicker; it changes only when the road itself moves.
+// ------------------------------------------------------------
+
+const BRIDGE_KEEP_CHANCE = 0.2;
+
+// Sampling step along a road, in map pixels (the land cover
+// mask's own resolution).
+const CROSSING_STEP = 0.75;
+
+
+// What the road p-q passes over: "water" if any of it is open
+// water, "land" if it only crosses other unbuildable ground, null
+// if it stays on buildable ground the whole way.
+function roadCrossingKind(p, q) {
+
+    const length =
+        Math.hypot(q.x - p.x, q.y - p.y);
+
+    const steps =
+        Math.ceil(length / CROSSING_STEP);
+
+    let kind = null;
+
+    // Endpoints are road nodes, already known to be on land.
+    for (let s = 1; s < steps; s++) {
+
+        const t = s / steps;
+
+        const x = p.x + (q.x - p.x) * t;
+        const y = p.y + (q.y - p.y) * t;
+
+        if (isLand(x, y)) {
+            continue;
+        }
+
+        if (isWaterAt(x, y)) {
+            return "water";
+        }
+
+        kind = "land";
+    }
+
+    return kind;
+}
+
+
+// Stable 0..1 value per road, independent of direction.
+function roadHash01(p, q) {
+
+    const [a, b] =
+        p.x < q.x || (p.x === q.x && p.y <= q.y)
+            ? [p, q]
+            : [q, p];
+
+    const h =
+        Math.sin(
+            a.x * 12.9898 + a.y * 78.233 +
+            b.x * 39.3468 + b.y * 11.1351
+        ) * 43758.5453;
+
+    return h - Math.floor(h);
+}
+
+
+function edgeKeyOf(a, b) {
+    return a < b ? `${a},${b}` : `${b},${a}`;
+}
+
+
+function removeUnbuildableCrossings(nodes, edges) {
+
+    const crossing = [];
+
+    edges.forEach(([a, b], i) => {
+        if (roadCrossingKind(nodes[a], nodes[b])) {
+            crossing.push(i);
+        }
+    });
+
+    const result = {
+        edges,
+        found: crossing.length,
+        removed: 0,
+        keptByChance: 0,
+        keptNeeded: 0
+    };
+
+    if (!crossing.length) {
+        return result;
+    }
+
+    const alive = edges.map(() => true);
+
+    const adj = Array.from({ length: nodes.length }, () => []);
+
+    edges.forEach(([a, b], i) => {
+        adj[a].push(i);
+        adj[b].push(i);
+    });
+
+    // Can b still be reached from a without edge `skip`?
+    const reachableWithout = (from, to, skip) => {
+
+        const seen = new Uint8Array(nodes.length);
+        const stack = [from];
+        seen[from] = 1;
+
+        while (stack.length) {
+
+            const v = stack.pop();
+
+            if (v === to) {
+                return true;
+            }
+
+            for (const ei of adj[v]) {
+
+                if (ei === skip || !alive[ei]) {
+                    continue;
+                }
+
+                const [x, y] = edges[ei];
+                const w = x === v ? y : x;
+
+                if (!seen[w]) {
+                    seen[w] = 1;
+                    stack.push(w);
+                }
+            }
+        }
+
+        return false;
+    };
+
+    const chance = i =>
+        roadHash01(nodes[edges[i][0]], nodes[edges[i][1]]);
+
+    // Same stable order on every rebuild.
+    crossing.sort((i, j) => chance(i) - chance(j));
+
+    for (const i of crossing) {
+
+        if (chance(i) < BRIDGE_KEEP_CHANCE) {
+            result.keptByChance++;
+            continue;
+        }
+
+        const [a, b] = edges[i];
+
+        if (!reachableWithout(a, b, i)) {
+            result.keptNeeded++;
+            continue;
+        }
+
+        alive[i] = false;
+        result.removed++;
+    }
+
+    result.edges = edges.filter((_, i) => alive[i]);
+
+    return result;
+}
+
+
+// ------------------------------------------------------------
 // Build the whole thing
 // ------------------------------------------------------------
 
@@ -257,6 +444,16 @@ function buildRoadNetwork() {
             .map(([a, b]) => [a, b]);
 
     const urquhartEdgeCount = split.kept.length;
+
+    // --------------------------------------------------------
+    // 4. Roads over unbuildable ground (before pruning, so a
+    //    dead end left behind by a removal is pruned too)
+    // --------------------------------------------------------
+
+    const crossings =
+        removeUnbuildableCrossings(nodes, edges);
+
+    edges = crossings.edges;
 
     // --------------------------------------------------------
     // 1. Prune cul-de-sacs
@@ -336,7 +533,23 @@ function buildRoadNetwork() {
                     candidates.push(n);
                 }
 
-                candidates
+                // Spurs that stay on buildable ground first; one
+                // over water is used only to make up the count,
+                // and becomes a bridge.
+                const facilityNode = nodes[index];
+
+                const dry = [];
+                const wet = [];
+
+                for (const target of candidates) {
+                    (roadCrossingKind(facilityNode, nodes[target])
+                        ? wet
+                        : dry
+                    ).push(target);
+                }
+
+                dry
+                    .concat(wet)
                     .slice(0, linksEach)
                     .forEach(target => {
                         facilityEdges.push([index, target]);
@@ -363,6 +576,24 @@ function buildRoadNetwork() {
         totalLength += lengthOf(nodes, e);
     }
 
+    // Whatever still crosses unbuildable ground after removal
+    // and pruning: a bridge if it crosses water, an off-land road
+    // otherwise. Keyed by node pair so the label survives
+    // simplification, which only ever drops edges.
+    const bridges = new Set();
+    const offLand = new Set();
+
+    for (const [a, b] of allEdges) {
+
+        const kind = roadCrossingKind(nodes[a], nodes[b]);
+
+        if (kind === "water") {
+            bridges.add(edgeKeyOf(a, b));
+        } else if (kind === "land") {
+            offLand.add(edgeKeyOf(a, b));
+        }
+    }
+
     roadNetworkDirty = false;
 
     roadNetwork = {
@@ -378,7 +609,15 @@ function buildRoadNetwork() {
         removedAvailable: split.removed.length,
         prunedNodes,
         linkedFacilities,
-        roadNodeCount
+        roadNodeCount,
+        bridges,
+        offLand,
+        crossings: {
+            found: crossings.found,
+            removed: crossings.removed,
+            keptByChance: crossings.keptByChance,
+            keptNeeded: crossings.keptNeeded
+        }
     };
 
     return roadNetwork;
@@ -395,6 +634,7 @@ function drawUrquhart() {
 
     if (!urquhartToggle.checked) {
         updateRoadStats();
+        drawBuildings();
         return;
     }
 
@@ -409,6 +649,7 @@ function drawUrquhart() {
 
     if (!net) {
         updateRoadStats();
+        drawBuildings();
         return;
     }
 
@@ -434,16 +675,52 @@ function renderRoadNetwork(net) {
     // <line> elements would crawl at city scale.
     let d = "";
 
+    // Bridges (over water) and off-land roads (over other
+    // unbuildable ground) each get a path of their own, on top.
+    let bridgePath = "";
+    let offLandPath = "";
+
+    // Once the final network is classified: main roads get their
+    // own (wider) paths, and the rest are drawn as smaller roads.
+    const classified = !!net.mainRoads;
+
+    let mainPath = "";
+    let mainOffLandPath = "";
+
+    const isMain = (a, b) =>
+        classified && net.mainRoads.has(edgeKeyOf(a, b));
+
+    const isBridge = (a, b) =>
+        net.bridges && net.bridges.has(edgeKeyOf(a, b));
+
+    const isOffLand = (a, b) =>
+        net.offLand && net.offLand.has(edgeKeyOf(a, b));
+
+    const segment = (a, b) =>
+        `M${net.nodes[a].x},${net.nodes[a].y}` +
+        `L${net.nodes[b].x},${net.nodes[b].y}`;
+
     for (const [a, b] of net.edges) {
-        d +=
-            `M${net.nodes[a].x},${net.nodes[a].y}` +
-            `L${net.nodes[b].x},${net.nodes[b].y}`;
+
+        if (isBridge(a, b)) {
+            bridgePath += segment(a, b);
+        } else if (isMain(a, b)) {
+            if (isOffLand(a, b)) {
+                mainOffLandPath += segment(a, b);
+            } else {
+                mainPath += segment(a, b);
+            }
+        } else if (isOffLand(a, b)) {
+            offLandPath += segment(a, b);
+        } else {
+            d += segment(a, b);
+        }
     }
 
     if (d) {
         group
             .append("path")
-            .attr("class", "urquhart-edge")
+            .attr("class", classified ? "urquhart-edge minor" : "urquhart-edge")
             .attr("d", d);
     }
 
@@ -453,6 +730,16 @@ function renderRoadNetwork(net) {
         const byColor = new Map();
 
         for (const [a, b] of net.facilityEdges) {
+
+            if (isBridge(a, b)) {
+                bridgePath += segment(a, b);
+                continue;
+            }
+
+            if (isOffLand(a, b)) {
+                offLandPath += segment(a, b);
+                continue;
+            }
 
             const color =
                 net.nodes[a].color ||
@@ -474,6 +761,34 @@ function renderRoadNetwork(net) {
                 .attr("stroke", color)
                 .attr("d", path);
         }
+    }
+
+    if (offLandPath) {
+        group
+            .append("path")
+            .attr("class", classified ? "road-offland minor" : "road-offland")
+            .attr("d", offLandPath);
+    }
+
+    if (mainOffLandPath) {
+        group
+            .append("path")
+            .attr("class", "road-main road-offland")
+            .attr("d", mainOffLandPath);
+    }
+
+    if (mainPath) {
+        group
+            .append("path")
+            .attr("class", "road-main")
+            .attr("d", mainPath);
+    }
+
+    if (bridgePath) {
+        group
+            .append("path")
+            .attr("class", "road-bridge")
+            .attr("d", bridgePath);
     }
 
     // Ordinary graph nodes.
@@ -510,6 +825,9 @@ function renderRoadNetwork(net) {
     }
 
     updateRoadStats();
+
+    // Buildings are filtered against the roads just drawn.
+    drawBuildings();
 }
 
 
@@ -554,6 +872,21 @@ function updateRoadStats() {
         `${net.removedAvailable}\n` +
         `${net.prunedNodes} cul-de-sac nodes pruned · ` +
         `total ${metresLabel(net.totalLength)}` +
+        (net.crossings && net.crossings.found
+            ? `\nOver unbuildable ground: ${net.crossings.found} ` +
+              `roads, ${net.crossings.removed} removed · ` +
+              `${countKeyed(net, net.bridges)} bridges over water · ` +
+              `${countKeyed(net, net.offLand)} over other ground ` +
+              `(${net.crossings.keptNeeded} kept to stay connected)`
+            : "") +
+        (net.chains
+            ? `\nMain roads: ${net.chains.filter(c => c.main).length} ` +
+              `chains, ${metresLabel(d3.sum(net.chains.filter(c => c.main), c => c.length))}` +
+              ` · smaller roads: ${net.chains.filter(c => !c.main).length} chains`
+            : "") +
+        (buildingsReady
+            ? `\nBuildings: ${shownBuildingCount}`
+            : "") +
         (net.simplified
             ? (net.junctions
                 ? `\n${net.junctions.junctions.length} junctions ` +
@@ -568,6 +901,26 @@ function updateRoadStats() {
                    net.simplified.costBefore)).toFixed(1)}% length · ` +
               `min degree ${net.simplified.minDegree}`
             : "");
+}
+
+
+// How many of the network's current edges are in `keys` (bridges
+// or off-land roads; simplification may have removed some).
+function countKeyed(net, keys) {
+
+    if (!keys) {
+        return 0;
+    }
+
+    let n = 0;
+
+    for (const [a, b] of net.allEdges) {
+        if (keys.has(edgeKeyOf(a, b))) {
+            n++;
+        }
+    }
+
+    return n;
 }
 
 

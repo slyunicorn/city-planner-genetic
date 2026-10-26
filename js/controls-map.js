@@ -148,12 +148,18 @@ seaLevelInput.addEventListener(
 
             let facDrowned = 0;
 
+            // Blocks are judged after the points are re-filtered.
+            const blocks = getBlockCells();
+
             for (const layer of FACILITY_LAYERS) {
 
                 const n = layer.points.length;
 
                 layer.points =
-                    layer.points.filter(p => isLand(p.x, p.y));
+                    layer.points.filter(p =>
+                        isLand(p.x, p.y) &&
+                        (!blocks || blocks.isBuildableAt(p.x, p.y))
+                    );
 
                 facDrowned += n - layer.points.length;
             }

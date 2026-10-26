@@ -207,3 +207,18 @@ function isLand(x, y) {
 
     return true;
 }
+
+
+// Is this point open water (sea, river, lake)? Below sea level,
+// or the land cover's water class (80; tools/osm_landcover.py
+// burns the sea in as 80 too). A road over water is a bridge; a
+// road over any other unbuildable ground (forest, steep, ...) is
+// not.
+function isWaterAt(x, y) {
+
+    if (elevationData && getElevationAt(x, y) < seaLevelM) {
+        return true;
+    }
+
+    return !!habMask && landCoverCodeAt(x, y) === 80;
+}

@@ -145,6 +145,62 @@ const VERTEX_SNAP = 100;   // 1/100 px
 
 let buildingPoints = [];
 
+
+// Points where segment p-q crosses the closed polygon (array of
+// [x, y]). The endpoints are put in a fixed order first, so the
+// edge two neighbouring cells share yields bit-identical points
+// from both sides and dedupes cleanly.
+function segmentPolygonCrossings(p, q, polygon) {
+
+    const [a, b] =
+        p[0] < q[0] || (p[0] === q[0] && p[1] <= q[1])
+            ? [p, q]
+            : [q, p];
+
+    const minX = a[0];
+    const maxX = b[0];
+    const minY = Math.min(a[1], b[1]);
+    const maxY = Math.max(a[1], b[1]);
+
+    const rx = b[0] - a[0];
+    const ry = b[1] - a[1];
+
+    const out = [];
+
+    for (let j = 0; j < polygon.length; j++) {
+
+        const c = polygon[j];
+        const d = polygon[(j + 1) % polygon.length];
+
+        if (
+            Math.max(c[0], d[0]) < minX ||
+            Math.min(c[0], d[0]) > maxX ||
+            Math.max(c[1], d[1]) < minY ||
+            Math.min(c[1], d[1]) > maxY
+        ) {
+            continue;
+        }
+
+        const sx = d[0] - c[0];
+        const sy = d[1] - c[1];
+
+        const den = rx * sy - ry * sx;
+
+        if (Math.abs(den) < 1e-12) {
+            continue;
+        }
+
+        const t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / den;
+        const u = ((c[0] - a[0]) * ry - (c[1] - a[1]) * rx) / den;
+
+        if (t >= 0 && t <= 1 && u >= 0 && u < 1) {
+            out.push([a[0] + rx * t, a[1] + ry * t]);
+        }
+    }
+
+    return out;
+}
+
 function collectPolygonVertices() {
 
     buildingPoints = [];
@@ -168,7 +224,29 @@ function collectPolygonVertices() {
             getVoronoiExtent()
         );
 
+    const polygon =
+        cityClosed && boundaryPoints.length >= 3
+            ? getBoundaryPolygonPoints(200).map(q => [q.x, q.y])
+            : [];
+
     const seen = new Map();
+
+    const addCorner = (x, y) => {
+
+        const key =
+            `${Math.round(x * VERTEX_SNAP)},` +
+            `${Math.round(y * VERTEX_SNAP)}`;
+
+        if (!seen.has(key)) {
+            seen.set(key, { x, y });
+        }
+    };
+
+    // Where a cell's edges cross the city boundary. Corners
+    // outside the city are dropped below, so without these an
+    // edge cell would have roads on its inner side only; with
+    // them every cell is closed off along the boundary too.
+    const boundaryCrossings = [];
 
     for (
         let i = 0;
@@ -190,15 +268,16 @@ function collectPolygonVertices() {
             k++
         ) {
 
-            const x = cell[k][0];
-            const y = cell[k][1];
+            addCorner(cell[k][0], cell[k][1]);
 
-            const key =
-                `${Math.round(x * VERTEX_SNAP)},` +
-                `${Math.round(y * VERTEX_SNAP)}`;
-
-            if (!seen.has(key)) {
-                seen.set(key, { x, y });
+            if (polygon.length) {
+                boundaryCrossings.push(
+                    ...segmentPolygonCrossings(
+                        cell[k],
+                        cell[k + 1],
+                        polygon
+                    )
+                );
             }
         }
     }
@@ -206,22 +285,25 @@ function collectPolygonVertices() {
     let corners = [...seen.values()];
 
     // Same city + land rules the generators obey.
-    if (cityClosed && boundaryPoints.length >= 3) {
+    if (polygon.length) {
 
-        const polygon =
-            getBoundaryPolygonPoints(200)
-                .map(q => [q.x, q.y]);
+        corners =
+            corners.filter(p =>
+                d3.polygonContains(
+                    polygon,
+                    [p.x, p.y]
+                )
+            );
 
-        if (polygon.length) {
+        // Added after the containment filter: they sit ON the
+        // boundary, where polygonContains is a coin toss.
+        const before = seen.size;
 
-            corners =
-                corners.filter(p =>
-                    d3.polygonContains(
-                        polygon,
-                        [p.x, p.y]
-                    )
-                );
+        for (const [x, y] of boundaryCrossings) {
+            addCorner(x, y);
         }
+
+        corners.push(...[...seen.values()].slice(before));
     }
 
     buildingPoints =

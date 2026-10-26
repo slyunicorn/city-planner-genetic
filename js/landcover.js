@@ -1081,6 +1081,24 @@ function habitableAt(x, y) {
 }
 
 
+// Land cover class code (CLASSES key) of a map pixel, or null
+// when no mask is loaded.
+function landCoverCodeAt(x, y) {
+
+    if (!habMask) {
+        return null;
+    }
+
+    const w = habMask.cols;
+    const h = habMask.rows;
+
+    const px = Math.min(w - 1, Math.max(0, Math.round(x)));
+    const py = Math.min(h - 1, Math.max(0, Math.round(y)));
+
+    return habMask.code[py * w + px];
+}
+
+
 function countBlockedHabitability() {
 
     if (!habMask) {
@@ -1346,11 +1364,17 @@ function reapplyHabitabilityToExistingPoints() {
 
     let facRemoved = 0;
 
+    // Blocks are judged after the points are re-filtered.
+    const blocks = getBlockCells();
+
     for (const layer of FACILITY_LAYERS) {
 
         const n = layer.points.length;
 
-        layer.points = layer.points.filter(p => isLand(p.x, p.y));
+        layer.points = layer.points.filter(p =>
+            isLand(p.x, p.y) &&
+            (!blocks || blocks.isBuildableAt(p.x, p.y))
+        );
 
         facRemoved += n - layer.points.length;
     }
@@ -1559,13 +1583,13 @@ function ensureHatchPattern() {
 }
 
 
-// Hatches block-Voronoi cells where at least a quarter of the
-// cell's area (sampled on a 6x6 grid, clipped to the real cell
-// polygon) is unbuildable. Cells whose generator point itself is
-// unbuildable never get this far - that point is filtered out of
-// `points` the same way a drowned point already was - so this is
-// specifically for cells whose AREA overlaps unbuildable land
-// even though their own site doesn't.
+// Hatches the blocks that are NOT buildable: at least a quarter
+// of the block's area (6x6 samples, the block clipped to the
+// city) is unbuildable. Same test, from getBlockCells()
+// (buildings.js), that keeps facilities and buildings out of
+// these blocks, so what is hatched is exactly what they avoid.
+// Blocks whose own point is unbuildable never get this far - the
+// point is filtered out of `points`, like a drowned one.
 function drawLandCoverCells() {
 
     landCoverCellLayer.selectAll("*").remove();
@@ -1574,19 +1598,13 @@ function drawLandCoverCells() {
         return;
     }
 
-    const activePoints = getInsideCityPoints();
+    const blocks = getBlockCells();
 
-    if (activePoints.length < 2) {
+    if (!blocks) {
         return;
     }
 
     ensureHatchPattern();
-
-    const delaunay =
-        d3.Delaunay.from(activePoints, d => d.x, d => d.y);
-
-    const voronoi =
-        delaunay.voronoi(getVoronoiExtent());
 
     const group = landCoverCellLayer.append("g");
 
@@ -1594,46 +1612,9 @@ function drawLandCoverCells() {
         group.attr("clip-path", "url(#cityClip)");
     }
 
-    const SAMPLE = 6;
+    for (const cell of blocks.cells) {
 
-    for (let i = 0; i < activePoints.length; i++) {
-
-        const cell = voronoi.cellPolygon(i);
-
-        if (!cell) {
-            continue;
-        }
-
-        const xs = cell.map(p => p[0]);
-        const ys = cell.map(p => p[1]);
-
-        const minX = Math.min(...xs);
-        const maxX = Math.max(...xs);
-        const minY = Math.min(...ys);
-        const maxY = Math.max(...ys);
-
-        let total = 0;
-        let blockedCount = 0;
-
-        for (let sy = 0; sy < SAMPLE; sy++) {
-            for (let sx = 0; sx < SAMPLE; sx++) {
-
-                const px = minX + (sx + 0.5) / SAMPLE * (maxX - minX);
-                const py = minY + (sy + 0.5) / SAMPLE * (maxY - minY);
-
-                if (!d3.polygonContains(cell, [px, py])) {
-                    continue;
-                }
-
-                total++;
-
-                if (!habitableAt(px, py)) {
-                    blockedCount++;
-                }
-            }
-        }
-
-        if (total === 0 || blockedCount / total < 0.25) {
+        if (!cell || cell.buildable || cell.polygon.length < 3) {
             continue;
         }
 
@@ -1642,7 +1623,7 @@ function drawLandCoverCells() {
             .attr("class", "no-build-cell")
             .attr(
                 "d",
-                "M" + cell.map(p => `${p[0]},${p[1]}`).join("L") + "Z"
+                "M" + cell.polygon.map(p => `${p[0]},${p[1]}`).join("L") + "Z"
             );
     }
 }

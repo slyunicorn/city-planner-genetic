@@ -95,6 +95,10 @@ function runRoadSimplification() {
 
     simplifyBtn.textContent = "Stop";
 
+    // Buildings belong to the FINAL network only; hide any from a
+    // previous run while this one works.
+    buildingsReady = false;
+
     const run = {
         cancelled: false,
         attempt: 0,
@@ -250,7 +254,7 @@ function runRoadSimplification() {
             return;
         }
 
-        report();
+        finalizeNetwork();
     }
 
 
@@ -274,7 +278,7 @@ function runRoadSimplification() {
                     `over ${i} iterations.`
                 );
 
-                report();
+                finalizeNetwork();
                 return;
             }
 
@@ -291,6 +295,92 @@ function runRoadSimplification() {
         }
 
         requestAnimationFrame(tick);
+    }
+
+
+    // --------------------------------------------------------
+    // Final steps, on the chosen and smoothed network:
+    //   1. classify roads into main / smaller
+    //   2. straighten main roads, turn by turn (animated)
+    //   3. relabel bridges, then generate the buildings
+    // --------------------------------------------------------
+
+    function finalizeNetwork() {
+
+        const share =
+            Number(mainShareSlider.value) / 100;
+
+        const maxTurnDeg =
+            Number(mainTurnSlider.value);
+
+        const chains =
+            classifyRoads(base, share);
+
+        const main =
+            chains.filter(c => c.main);
+
+        logStep(
+            `Road classes: ${main.length} main roads ` +
+            `(${metresLabel(d3.sum(main, c => c.length))}, ` +
+            `longest ${metresLabel(main.length ? main[0].length : 0)}), ` +
+            `${chains.length - main.length} smaller roads.`
+        );
+
+        if (run.cancelled || maxTurnDeg <= 0 || !main.length) {
+            finishBuild();
+            return;
+        }
+
+        const maxTurn = maxTurnDeg * Math.PI / 180;
+        const fixed = mainRoadFixedNodes(base);
+        const gentle = gentleMainRoadTurns(base, maxTurn);
+        const before = meanTurnDegrees(base, gentle);
+
+        let i = 0;
+        let last = { moved: 0, kept: 0 };
+
+        function tick() {
+
+            if (run.cancelled || i >= MAIN_STRAIGHTEN_ITERATIONS) {
+
+                logStep(
+                    `Main roads straightened: ${gentle.length} turns ` +
+                    `under ${maxTurnDeg}° went from ${before.toFixed(1)}° ` +
+                    `to ${meanTurnDegrees(base, gentle).toFixed(1)}° on ` +
+                    `average; ${last.kept} sharper turns left as corners.`
+                );
+
+                finishBuild();
+                return;
+            }
+
+            last = straightenMainRoadsStep(base, maxTurn, fixed);
+
+            i++;
+
+            renderRoadNetwork(base);
+
+            status.textContent =
+                `Straightening main roads ${i}/${MAIN_STRAIGHTEN_ITERATIONS}...`;
+
+            requestAnimationFrame(tick);
+        }
+
+        requestAnimationFrame(tick);
+    }
+
+
+    function finishBuild() {
+
+        reclassifyCrossings(base);
+
+        buildingsReady = true;
+
+        renderRoadNetwork(base);
+
+        logStep(`Buildings: ${shownBuildingCount} placed.`);
+
+        report();
     }
 
 

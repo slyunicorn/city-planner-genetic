@@ -37,6 +37,7 @@ function closeCity() {
     drawBoundary();
     drawPoints();
     drawVoronoi();
+    drawLandCoverCells();
     drawUrquhart();
 
     relaxBtn.disabled = false;
