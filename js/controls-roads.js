@@ -13,22 +13,25 @@ straightenSlider.addEventListener(
 );
 
 
-mainShareSlider.addEventListener(
-    "input",
-    () => {
-
-        mainShareValue.textContent =
-            mainShareSlider.value;
-    }
-);
-
-
 mainTurnSlider.addEventListener(
     "input",
     () => {
 
         mainTurnValue.textContent =
             mainTurnSlider.value;
+    }
+);
+
+
+maxBuildingSlider.addEventListener(
+    "input",
+    () => {
+
+        maxBuildingValue.textContent =
+            maxBuildingSlider.value;
+
+        // Only the drawing changes; the plan is cached.
+        drawBuildings();
     }
 );
 
@@ -48,7 +51,9 @@ speedSlider.addEventListener(
     () => {
 
         speedValue.textContent =
-            speedSlider.value;
+            speedSlider.value === speedSlider.max
+                ? "Max"
+                : speedSlider.value;
     }
 );
 

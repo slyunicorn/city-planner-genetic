@@ -28,6 +28,7 @@
 
             <g id="voronoiLayer"></g>
             <g id="landCoverCellLayer"></g>
+            <g id="densityLayer"></g>
             <g id="buildingLayer"></g>
             <g id="urquhartLayer"></g>
             <g id="boundaryLayer"></g>
@@ -198,25 +199,6 @@
                 <input id="kSlider" type="range" min="1" max="100" value="30">
             </div>
 
-            <div class="control-section">
-                <label>
-                    <span>Edge density falloff</span>
-                    <span><span id="densityFalloffValue">50</span>%</span>
-                </label>
-
-                <input id="densityFalloffSlider" type="range" min="0" max="100" step="5" value="50">
-
-                <div class="hint">
-                    Inside the closed city, blocks are sparse at the
-                    boundary and get denser going in, levelling off
-                    at spacing R. This is how far in (as a share of
-                    the way to the deepest point) the density keeps
-                    rising. 0% = the same density everywhere.
-                    Applied when the city closes; changing it later
-                    regenerates the points.
-                </div>
-            </div>
-
             <button id="generateBtn">
                 Generate Poisson Points
             </button>
@@ -236,6 +218,37 @@
 
             <div class="control-section">
                 <label>
+                    <span>Centre density</span>
+                    <span>&times;<span id="centreDensityValue">3.0</span></span>
+                </label>
+
+                <input id="centreDensitySlider" type="range" min="1.5" max="6" step="0.5" value="3">
+
+                <div class="hint">
+                    Relaxing gathers blocks towards the middle of the
+                    city: the centre ends up this many times as dense
+                    as the edge, rising steadily in between.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Density hotspots</span>
+                    <span id="hotspotValue">2</span>
+                </label>
+
+                <input id="hotspotSlider" type="range" min="0" max="5" value="2">
+
+                <div class="hint">
+                    Extra-dense spots (sub-centres), drawn as dashed
+                    circles. They go on the flattest buildable ground
+                    away from the edge, the centre and each other;
+                    fewer appear when the city has no room.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
                     <span>Flat-ground pull</span>
                     <span id="flatPullValue">4.0</span>
                 </label>
@@ -243,10 +256,11 @@
                 <input id="flatPullSlider" type="range" min="0" max="8" step="0.5" value="4">
 
                 <div class="hint">
-                    Relaxation moves each point to the flatness-
-                    weighted centre of its cell (darker on the Sobel
-                    map = flatter = heavier). Higher = only the
-                    flattest ground counts. 0 = ignore slope.
+                    Every relax step moves points towards flatter
+                    ground (darker on the Sobel map): flat ground
+                    gets a higher target density, and each point
+                    leans to the flattest part of its cell. Higher =
+                    only the flattest ground counts. 0 = ignore slope.
                 </div>
             </div>
 
@@ -462,13 +476,15 @@
             <div class="control-section">
                 <label>
                     <span>Speed</span>
-                    <span id="speedValue">6</span>
+                    <span id="speedValue">Max</span>
                 </label>
 
-                <input id="speedSlider" type="range" min="1" max="60" value="6">
+                <input id="speedSlider" type="range" min="1" max="60" value="60">
 
                 <div class="hint">
-                    Removals per frame. Low is slow and watchable.
+                    Steps per frame. Low is slow and watchable; Max
+                    (far right) works as fast as the computer allows
+                    and still redraws as it goes.
                 </div>
             </div>
 
@@ -490,19 +506,19 @@
 
             <div class="control-section">
                 <label>
-                    <span>Main road share</span>
-                    <span><span id="mainShareValue">30</span>%</span>
+                    <span>Main roads</span>
+                    <span>automatic</span>
                 </label>
-
-                <input id="mainShareSlider" type="range" min="5" max="70" value="30">
 
                 <div class="hint">
                     After the final network is picked and smoothed,
-                    roads are traced into long chains that carry on
-                    through junctions along the straightest branch.
-                    The longest chains, together this share of all
-                    road length, become main roads; the rest are
-                    smaller roads.
+                    every pair of buildings gets a trip along its
+                    quickest route. Long, continuous routes that
+                    carry more than their share of those trips become
+                    main roads; main roads are faster, so trips move
+                    onto them and the choice is redone until it
+                    settles. How much of the network is main road
+                    comes out of that (see the log).
                 </div>
             </div>
 
@@ -519,6 +535,22 @@
                     pulled straighter; a sharper turn is kept as a
                     real corner. 0 turns it off. Applies on the next
                     Simplify run.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Max building size</span>
+                    <span>&times;<span id="maxBuildingValue">15</span></span>
+                </label>
+
+                <input id="maxBuildingSlider" type="range" min="1" max="40" value="15">
+
+                <div class="hint">
+                    No building (single, combined or facility) may be
+                    bigger than this many times the smallest
+                    single-plot building; bigger ones are shrunk
+                    around their centre. Applies straight away.
                 </div>
             </div>
 

@@ -139,6 +139,7 @@ async function loadTerrainFromControls() {
     cityClipPath.attr("d", "");
     voronoiLayer.selectAll("*").remove();
     landCoverCellLayer.selectAll("*").remove();
+    densityLayer.selectAll("*").remove();
     boundaryLayer.selectAll("*").remove();
     vertexLayer.selectAll("*").remove();
     facilityVoronoiLayer.selectAll("*").remove();

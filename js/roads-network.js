@@ -770,6 +770,24 @@ function roadNodesInUse(net) {
 }
 
 
+// Many dots as ONE path (each dot is two arcs). A <circle> per
+// road node made every redraw create and style thousands of
+// elements, which slowed the animated simplification.
+function dotsPath(points, r) {
+
+    let d = "";
+
+    for (const p of points) {
+        d +=
+            `M${p.x - r},${p.y}` +
+            `a${r},${r} 0 1,0 ${2 * r},0` +
+            `a${r},${r} 0 1,0 ${-2 * r},0`;
+    }
+
+    return d;
+}
+
+
 function renderRoadNetwork(net) {
 
     urquhartLayer.selectAll("*").remove();
@@ -906,13 +924,9 @@ function renderRoadNetwork(net) {
         Math.max(1.2, 2.5 / zoomScale);
 
     group
-        .selectAll("circle.building-point")
-        .data(roadNodesInUse(net))
-        .join("circle")
+        .append("path")
         .attr("class", "building-point")
-        .attr("cx", p => p.x)
-        .attr("cy", p => p.y)
-        .attr("r", radius);
+        .attr("d", dotsPath(roadNodesInUse(net), radius));
 
     // Selected road junctions, drawn larger and on top.
     if (net.junctions && junctionToggle.checked) {
@@ -921,17 +935,17 @@ function renderRoadNetwork(net) {
             Math.max(2.6, 5 / zoomScale);
 
         group
-            .selectAll("circle.road-junction")
-            .data(
-                net.junctions.junctions
-                    .filter(i => i < net.nodes.length)
-                    .map(i => net.nodes[i])
-            )
-            .join("circle")
+            .append("path")
             .attr("class", "road-junction")
-            .attr("cx", p => p.x)
-            .attr("cy", p => p.y)
-            .attr("r", jr);
+            .attr(
+                "d",
+                dotsPath(
+                    net.junctions.junctions
+                        .filter(i => i < net.nodes.length)
+                        .map(i => net.nodes[i]),
+                    jr
+                )
+            );
     }
 
     // Buildings are filtered against the roads just drawn; the
@@ -995,8 +1009,12 @@ function updateRoadStats() {
               `${net.crossings.outsideRemoved} removed`
             : "") +
         (net.chains
-            ? `\nMain roads: ${net.chains.filter(c => c.main).length} ` +
-              `chains, ${metresLabel(d3.sum(net.chains.filter(c => c.main), c => c.length))}` +
+            ? `\nMain roads: ${net.chains.filter(c => c.main).length}, ` +
+              `${metresLabel(d3.sum(net.chains.filter(c => c.main), c => c.length))}` +
+              (net.mainRoadInfo
+                  ? ` (${(100 * net.mainRoadInfo.share).toFixed(0)}% of length, ` +
+                    `auto; ${(100 * net.mainRoadInfo.travelShare).toFixed(0)}% of travel)`
+                  : "") +
               ` · smaller roads: ${net.chains.filter(c => !c.main).length} chains`
             : "") +
         (buildingsReady

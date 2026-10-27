@@ -241,7 +241,7 @@ body {
     stroke-width: 1;
 }
 
-/* Building footprints, one per buildable block. */
+/* Building footprints, one per plot (a block or 2-4 combined). */
 .building {
     fill: #9a9a9a;
     fill-opacity: 0.92;
@@ -252,6 +252,14 @@ body {
     vector-effect: non-scaling-stroke;
 
     pointer-events: none;
+}
+
+/* A facility's building, filled with its layer colour (inline). */
+.building.facility-building {
+    fill-opacity: 0.95;
+
+    stroke: rgba(0, 0, 0, 0.6);
+    stroke-width: 1;
 }
 
 .road-legend {
@@ -308,6 +316,20 @@ body {
 
 .building-point {
     fill: #ffeeb0;
+
+    pointer-events: none;
+}
+
+/* Relaxation density hotspots (relaxation.js) */
+.density-spot {
+    fill: rgba(255, 255, 255, 0.08);
+
+    stroke: #ffffff;
+    stroke-opacity: 0.85;
+    stroke-width: 2;
+    stroke-dasharray: 7 5;
+
+    vector-effect: non-scaling-stroke;
 
     pointer-events: none;
 }

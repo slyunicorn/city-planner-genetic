@@ -32,6 +32,7 @@ import pandas as pd
 import osmium
 import osmnx as ox
 import rasterio
+import shapely
 from rasterio.features import rasterize
 from rasterio.transform import from_bounds
 from shapely.geometry import box
@@ -158,26 +159,8 @@ class Cancelled(Exception):
     pass
 
 
-def extract_xml(pbf, bbox, xml_path, log=print, should_stop=lambda: False):
-    """
-    Write the relevant features inside bbox to an .osm XML file that
-    osmnx can read. Three cheap passes over the PBF:
-      1. relations: remember tagged multipolygons and their member ways
-      2. ways (with node locations): keep those touching the bbox
-      3. relations again: write the ones with a member in the bbox
-    BackReferenceWriter then adds every referenced way and node.
-    """
-
-    west, south, east, north = bbox
-
-    def in_bbox(way):
-        for n in way.nodes:
-            loc = n.location
-            if loc.valid() and west <= loc.lon <= east and south <= loc.lat <= north:
-                return True
-        return False
-
-    t = time.time()
+def member_ways_of(pbf, should_stop=lambda: False):
+    """Ids of the member ways of every land cover multipolygon in pbf."""
 
     member_ways = set()
     for rel in osmium.FileProcessor(pbf, osmium.osm.RELATION) \
@@ -186,9 +169,122 @@ def extract_xml(pbf, bbox, xml_path, log=print, should_stop=lambda: False):
             raise Cancelled()
         if rel.tags.get("type") == "multipolygon":
             member_ways.update(m.ref for m in rel.members if m.type == "w")
+    return member_ways
+
+
+# Ways are picked per area by their bounding box, from an index built
+# once per .osm.pbf and cached next to it. Walking every node of every
+# way in Python instead took ~45 s per area for southern India; the
+# index takes ~10 s once, after which an area takes a few seconds.
+WAY_INDEX_VERSION = 1
+
+
+def way_index_path(pbf):
+    base = pbf[:-len(".osm.pbf")] if pbf.endswith(".osm.pbf") else os.path.splitext(pbf)[0]
+    return base + ".wayidx.npz"
+
+
+def way_index(pbf, member_ways, log=print, should_stop=lambda: False):
+    """
+    (ids, boxes) for every land cover way in pbf (tagged with KEYS, or a
+    member of a land cover multipolygon): its id and lon/lat bounding box
+    (west, south, east, north). Rebuilt when pbf changes.
+    """
+
+    path = way_index_path(pbf)
+    st = os.stat(pbf)
+    sig = np.array([WAY_INDEX_VERSION, st.st_size, st.st_mtime_ns], dtype=np.int64)
+
+    try:
+        with np.load(path) as z:
+            if np.array_equal(z["sig"], sig):
+                return z["ids"], z["boxes"]
+    except (OSError, KeyError, ValueError):
+        pass
+
+    log(f"  indexing {os.path.basename(pbf)} (one time per file)")
+    t = time.time()
+
+    # Bounds come from WKB in batches: shapely does the per-node work
+    # in C, and memory stays small.
+    fab = osmium.geom.WKBFactory()
+    ids = []
+    boxes = []
+    batch = []
+
+    def flush():
+        if batch:
+            boxes.append(shapely.bounds(shapely.from_wkb(batch, on_invalid="ignore")))
+            batch.clear()
+
+    for way in osmium.FileProcessor(pbf, osmium.osm.NODE | osmium.osm.WAY) \
+            .with_locations() \
+            .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY)):
+
+        if should_stop():
+            raise Cancelled()
+
+        if not relevant(way.tags) and way.id not in member_ways:
+            continue
+
+        try:
+            wkb = fab.create_linestring(way, osmium.geom.use_nodes.ALL)
+        except Exception:
+            # Missing node locations (a way cut at the extract edge)
+            # or fewer than two nodes.
+            continue
+
+        ids.append(way.id)
+        batch.append(bytes.fromhex(wkb))
+
+        if len(batch) == 50_000:
+            flush()
+
+    flush()
+
+    ids = np.array(ids, dtype=np.int64)
+    boxes = np.concatenate(boxes) if boxes else np.empty((0, 4))
+
+    try:
+        tmp = path[:-len(".npz")] + ".tmp.npz"
+        np.savez(tmp, sig=sig, ids=ids, boxes=boxes)
+        os.replace(tmp, path)
+    except OSError as e:
+        log(f"  (could not save the way index: {e})")
+
+    log(f"  indexed {len(ids):,} ways ({time.time() - t:.0f} s)")
+    return ids, boxes
+
+
+def prepare_way_index(pbf, log=print):
+    """Build the way index ahead of time (region preparation)."""
+    way_index(pbf, member_ways_of(pbf), log)
+
+
+def extract_xml(pbf, bbox, xml_path, log=print, should_stop=lambda: False):
+    """
+    Write the relevant features inside bbox to an .osm XML file that
+    osmnx can read:
+      1. relations: remember tagged multipolygons and their member ways
+      2. ways whose bounding box meets bbox, picked from the way index
+         (so a lake or forest around the whole area counts too)
+      3. relations again: write the ones with a member in the bbox
+    BackReferenceWriter then adds every referenced way and node.
+    """
+
+    west, south, east, north = bbox
+
+    t = time.time()
+
+    member_ways = member_ways_of(pbf, should_stop)
 
     log(f"  pass 1: {len(member_ways):,} candidate member ways "
           f"({time.time() - t:.0f} s)")
+
+    ids, boxes = way_index(pbf, member_ways, log, should_stop)
+
+    near = ids[(boxes[:, 0] <= east) & (boxes[:, 2] >= west) &
+               (boxes[:, 1] <= north) & (boxes[:, 3] >= south)]
 
     t = time.time()
     rel_ways_in = set()
@@ -196,24 +292,15 @@ def extract_xml(pbf, bbox, xml_path, log=print, should_stop=lambda: False):
 
     with osmium.BackReferenceWriter(xml_path, ref_src=pbf, overwrite=True) as writer:
 
-        # Nodes still feed the location index but are dropped in C++
-        # before reaching Python, which would otherwise be very slow.
-        for way in osmium.FileProcessor(pbf, osmium.osm.NODE | osmium.osm.WAY) \
-                .with_locations() \
-                .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY)):
+        # Only the indexed ways near the area reach Python; the id
+        # filter runs in C++.
+        for way in osmium.FileProcessor(pbf, osmium.osm.WAY) \
+                .with_filter(osmium.filter.IdFilter(near.tolist())):
 
             if should_stop():
                 raise Cancelled()
 
-            tagged = relevant(way.tags)
-
-            if not tagged and way.id not in member_ways:
-                continue
-
-            if not in_bbox(way):
-                continue
-
-            if tagged:
+            if relevant(way.tags):
                 writer.add_way(way)
                 n_ways += 1
 

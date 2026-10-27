@@ -25,6 +25,13 @@
 
 let simplifyRun = null;
 
+// Speed at the top of its slider means "Max": instead of a fixed
+// number of steps, each frame works for up to this long and then
+// paints once. A run then takes about as long as its arithmetic,
+// not (steps ÷ speed) frames; a big network needs thousands of
+// steps, which at 6 per frame was minutes of waiting on frames.
+const MAX_SPEED_FRAME_MS = 50;
+
 
 function stopSimplification() {
 
@@ -72,6 +79,9 @@ function runRoadSimplification() {
 
     const speed =
         Number(speedSlider.value);
+
+    const maxSpeed =
+        speed >= Number(speedSlider.max);
 
     const useJunctions =
         junctionToggle.checked;
@@ -393,9 +403,13 @@ function runRoadSimplification() {
                 return;
             }
 
-            straightenRoadChains(base, 0.25, anchors);
+            // One iteration per frame, or at Max as many as fit.
+            const until = performance.now() + MAX_SPEED_FRAME_MS;
 
-            i++;
+            do {
+                straightenRoadChains(base, 0.25, anchors);
+                i++;
+            } while (maxSpeed && i < iterations && performance.now() < until);
 
             renderRoadNetwork(base);
 
@@ -411,30 +425,69 @@ function runRoadSimplification() {
 
     // --------------------------------------------------------
     // Final steps, on the chosen and smoothed network:
-    //   1. classify roads into main / smaller
+    //   1. choose the main roads (automatic, one round per frame)
     //   2. straighten main roads, turn by turn (animated)
     //   3. relabel bridges, then generate the buildings
     // --------------------------------------------------------
 
     function finalizeNetwork() {
 
-        const share =
-            Number(mainShareSlider.value) / 100;
+        const selector =
+            createMainRoadSelector(base, qualityCtx.nodeBlocks);
+
+        function tick() {
+
+            const more = selector.step();
+
+            selector.apply();
+
+            renderRoadNetwork(base);
+
+            status.textContent =
+                `Choosing main roads, round ${selector.round}...`;
+
+            if (more && !run.cancelled) {
+                requestAnimationFrame(tick);
+                return;
+            }
+
+            straightenMainRoads();
+        }
+
+        requestAnimationFrame(tick);
+    }
+
+
+    function straightenMainRoads() {
 
         const maxTurnDeg =
             Number(mainTurnSlider.value);
 
-        const chains =
-            classifyRoads(base, share);
+        const chains = base.chains;
 
         const main =
             chains.filter(c => c.main);
 
+        const info = base.mainRoadInfo;
+
+        const pct = v => `${(100 * v).toFixed(0)}%`;
+
         logStep(
-            `Road classes: ${main.length} main roads ` +
-            `(${metresLabel(d3.sum(main, c => c.length))}, ` +
-            `longest ${metresLabel(main.length ? main[0].length : 0)}), ` +
-            `${chains.length - main.length} smaller roads.`
+            main.length
+                ? `Main roads, chosen automatically in ${info.rounds} ` +
+                  `round${info.rounds === 1 ? "" : "s"}` +
+                  `${info.settled ? "" : " (stopped at the round limit)"}: ` +
+                  `${main.length} roads, ` +
+                  `${metresLabel(d3.sum(main, c => c.length))} = ` +
+                  `${pct(info.share)} of road length ` +
+                  `(longest ${metresLabel(main[0].length)}). They carry ` +
+                  `${pct(info.travelShare)} of the travel between ` +
+                  `buildings; ${info.facing} of ${info.blocks} buildable ` +
+                  `blocks face one. ${chains.length - main.length} ` +
+                  `smaller roads.`
+                : `Main roads: none - no route is at least ` +
+                  `${MAIN_MIN_LENGTH_R} blocks long and busier than ` +
+                  `average. ${chains.length} smaller roads.`
         );
 
         if (run.cancelled || maxTurnDeg <= 0 || !main.length) {
@@ -465,9 +518,16 @@ function runRoadSimplification() {
                 return;
             }
 
-            last = straightenMainRoadsStep(base, maxTurn, fixed);
+            const until = performance.now() + MAX_SPEED_FRAME_MS;
 
-            i++;
+            do {
+                last = straightenMainRoadsStep(base, maxTurn, fixed);
+                i++;
+            } while (
+                maxSpeed &&
+                i < MAIN_STRAIGHTEN_ITERATIONS &&
+                performance.now() < until
+            );
 
             renderRoadNetwork(base);
 
@@ -491,7 +551,7 @@ function runRoadSimplification() {
 
         renderRoadNetwork(base);
 
-        logStep(`Buildings: ${shownBuildingCount} placed.`);
+        logStep(`Buildings: ${buildingSummary()}.`);
 
         report();
     }
@@ -590,8 +650,11 @@ function runRoadSimplification() {
             return;
         }
 
-        // Advance the current attempt a little.
-        for (let i = 0; i < speed; i++) {
+        // Advance the current attempt a little: `speed` steps, or
+        // at Max as many as fit in the frame budget.
+        const until = performance.now() + MAX_SPEED_FRAME_MS;
+
+        for (let i = 0; maxSpeed ? performance.now() < until : i < speed; i++) {
 
             if (!run.runner.step()) {
                 break;

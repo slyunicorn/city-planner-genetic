@@ -197,7 +197,7 @@ The champion is checked: every facility, and every buildable block that had road
 ## After deletion
 
 1. **Chain straightening:** degree-2 nodes slide towards their neighbours' midpoint.
-2. **Main and smaller roads:** roads are traced into long strokes; the longest become main roads until they cover *Main road share*.
+2. **Main and smaller roads (automatic):** every pair of buildings (one per buildable block) gets a trip along its quickest route, and each road's traffic is the share of all trips that use it. Roads are traced into corridors that follow the busiest way through junctions (turns up to 60°). A corridor, with its quiet ends trimmed off (below the city's average traffic per metre), is a main road when it is at least 5 blocks long and busier than average per metre, i.e. its share of all travel is larger than its share of road length. Main roads are then treated as twice as fast, trips move onto them, and the choice is redone until it stops changing (usually 3–7 rounds). The main road share is the result, not a setting: 15–22% of road length on the test cities, carrying 54–63% of the travel.
 3. **Main-road straightening:** gentle turns are flattened; sharp turns are left as corners.
 4. **Validate and rescore (step H, `validateStraightenedNetwork()`):**
    * Each straightening move only checked that the point itself lands on buildable land.
@@ -231,7 +231,7 @@ The champion is checked: every facility, and every buildable block that had road
 | Cost weight λ | 1.0 | How much shorter roads count; higher favours removing long roads |
 | Removal sharpness | 2.0 | k = this ÷ typical \|ΔQ\| (low = random, high = greedy) |
 | Attempts | 6 | Independent runs; the best is kept |
-| Speed | 6 | Steps per frame (animation only) |
+| Speed | Max | Steps per frame (animation only); Max = as many as fit in 50 ms per frame |
 | Prune at junctions only | off | Visit only the selected junctions |
 | Junction radius | 40 px | Density radius for junction selection |
 

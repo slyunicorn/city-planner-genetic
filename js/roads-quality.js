@@ -708,7 +708,49 @@ function qualityShortestPaths(graph, src, euclid) {
 // are reattached through their best neighbour outside the
 // subtree, then Dijkstra runs inside it. Much cheaper than a
 // fresh tree, since most subtrees are small.
-function repairShortestPaths(graph, tree, cut, euclid) {
+//
+// Most calls only score a candidate removal, so by default only
+// the sums are returned and nothing the size of the whole graph
+// is copied or allocated: the subtree's new distances live in
+// shared scratch buffers. `full` (a committed removal) also
+// returns the complete dist / parent arrays of the new tree.
+let repairScratch = null;
+
+function repairScratchFor(n, m) {
+
+    const cap = n + 2 * m + 2;
+
+    if (!repairScratch || repairScratch.n < n || repairScratch.cap < cap) {
+        repairScratch = {
+            n,
+            cap,
+            stamp: 0,
+            subMark: new Int32Array(n),
+            doneMark: new Int32Array(n),
+            sub: new Int32Array(n),
+            dist: new Float64Array(n),
+            parent: new Int32Array(n),
+            heapDist: new Float64Array(cap),
+            heapNode: new Int32Array(cap)
+        };
+    }
+
+    const s = repairScratch;
+
+    // Marks compare against a per-call stamp instead of being
+    // cleared; start over before the stamp would overflow.
+    if (s.stamp >= 0x7ffffff0) {
+        s.stamp = 0;
+        s.subMark.fill(0);
+        s.doneMark.fill(0);
+    }
+
+    s.stamp++;
+
+    return s;
+}
+
+function repairShortestPaths(graph, tree, cut, euclid, full) {
 
     const e = graph.edges[cut];
 
@@ -721,26 +763,25 @@ function repairShortestPaths(graph, tree, cut, euclid) {
         return tree;
     }
 
-    const n = graph.nodes.length;
-
-    const dist = tree.dist.slice();
-    const parent = tree.parent.slice();
+    const s = repairScratchFor(graph.nodes.length, graph.edges.length);
+    const stamp = s.stamp;
+    const { subMark, doneMark, sub, dist, parent, heapDist, heapNode } = s;
 
     // The subtree: nodes whose tree path runs through `child`.
-    const inSub = new Uint8Array(n);
-    const sub = [child];
+    let subLen = 0;
 
-    inSub[child] = 1;
+    sub[subLen++] = child;
+    subMark[child] = stamp;
 
     let sumG = tree.sumG;
     let sumE = tree.sumE;
     let count = tree.count;
 
-    for (let i = 0; i < sub.length; i++) {
+    for (let i = 0; i < subLen; i++) {
 
         const x = sub[i];
 
-        sumG -= dist[x];
+        sumG -= tree.dist[x];
         sumE -= euclid[x];
         count--;
 
@@ -749,17 +790,22 @@ function repairShortestPaths(graph, tree, cut, euclid) {
             const f = graph.edges[ei];
             const w = f.a === x ? f.b : f.a;
 
-            if (!inSub[w] && tree.parent[w] === ei && f.alive) {
-                inSub[w] = 1;
-                sub.push(w);
+            if (subMark[w] !== stamp && tree.parent[w] === ei && f.alive) {
+                subMark[w] = stamp;
+                sub[subLen++] = w;
             }
         }
     }
 
-    // Reattach from outside, then settle inside the subtree.
-    const heap = [];
+    // Reattach from outside (whose distances do not change), then
+    // settle inside the subtree. The heap keeps the exact order of
+    // operations of the earlier array-of-pairs heap, so the sums
+    // add up in the same order and results are bit-identical.
+    let size = 0;
 
-    for (const x of sub) {
+    for (let i = 0; i < subLen; i++) {
+
+        const x = sub[i];
 
         dist[x] = Infinity;
         parent[x] = -1;
@@ -774,29 +820,32 @@ function repairShortestPaths(graph, tree, cut, euclid) {
 
             const w = f.a === x ? f.b : f.a;
 
-            if (!inSub[w] && dist[w] + f.length < dist[x]) {
-                dist[x] = dist[w] + f.length;
+            if (subMark[w] !== stamp && tree.dist[w] + f.length < dist[x]) {
+                dist[x] = tree.dist[w] + f.length;
                 parent[x] = ei;
             }
         }
 
         if (dist[x] < Infinity) {
-            heap.push([dist[x], x]);
+            heapDist[size] = dist[x];
+            heapNode[size] = x;
+            size++;
         }
     }
 
-    const less = (i, j) => heap[i][0] < heap[j][0];
-
     const swap = (i, j) => {
-        const t = heap[i];
-        heap[i] = heap[j];
-        heap[j] = t;
+        const d = heapDist[i];
+        const v = heapNode[i];
+        heapDist[i] = heapDist[j];
+        heapNode[i] = heapNode[j];
+        heapDist[j] = d;
+        heapNode[j] = v;
     };
 
     const up = i => {
         while (i > 0) {
             const p = (i - 1) >> 1;
-            if (!less(i, p)) {
+            if (!(heapDist[i] < heapDist[p])) {
                 break;
             }
             swap(i, p);
@@ -807,13 +856,13 @@ function repairShortestPaths(graph, tree, cut, euclid) {
     const down = i => {
         while (true) {
             let c = 2 * i + 1;
-            if (c >= heap.length) {
+            if (c >= size) {
                 break;
             }
-            if (c + 1 < heap.length && less(c + 1, c)) {
+            if (c + 1 < size && heapDist[c + 1] < heapDist[c]) {
                 c++;
             }
-            if (!less(c, i)) {
+            if (!(heapDist[c] < heapDist[i])) {
                 break;
             }
             swap(c, i);
@@ -821,27 +870,28 @@ function repairShortestPaths(graph, tree, cut, euclid) {
         }
     };
 
-    for (let i = (heap.length >> 1) - 1; i >= 0; i--) {
+    for (let i = (size >> 1) - 1; i >= 0; i--) {
         down(i);
     }
 
-    const done = new Uint8Array(n);
+    while (size > 0) {
 
-    while (heap.length) {
+        const d = heapDist[0];
+        const x = heapNode[0];
 
-        const [d, x] = heap[0];
-        const last = heap.pop();
+        size--;
 
-        if (heap.length) {
-            heap[0] = last;
+        if (size > 0) {
+            heapDist[0] = heapDist[size];
+            heapNode[0] = heapNode[size];
             down(0);
         }
 
-        if (done[x] || d > dist[x]) {
+        if (doneMark[x] === stamp || d > dist[x]) {
             continue;
         }
 
-        done[x] = 1;
+        doneMark[x] = stamp;
 
         sumG += d;
         sumE += euclid[x];
@@ -857,16 +907,34 @@ function repairShortestPaths(graph, tree, cut, euclid) {
 
             const w = f.a === x ? f.b : f.a;
 
-            if (inSub[w] && !done[w] && d + f.length < dist[w]) {
+            if (
+                subMark[w] === stamp &&
+                doneMark[w] !== stamp &&
+                d + f.length < dist[w]
+            ) {
                 dist[w] = d + f.length;
                 parent[w] = ei;
-                heap.push([dist[w], w]);
-                up(heap.length - 1);
+                heapDist[size] = dist[w];
+                heapNode[size] = w;
+                size++;
+                up(size - 1);
             }
         }
     }
 
-    return { dist, parent, sumG, sumE, count };
+    if (!full) {
+        return { sumG, sumE, count };
+    }
+
+    const fullDist = tree.dist.slice();
+    const fullParent = tree.parent.slice();
+
+    for (let i = 0; i < subLen; i++) {
+        fullDist[sub[i]] = dist[sub[i]];
+        fullParent[sub[i]] = parent[sub[i]];
+    }
+
+    return { dist: fullDist, parent: fullParent, sumG, sumE, count };
 }
 
 
@@ -1522,7 +1590,7 @@ function qualityEvaluateRemoval(st, e, commit) {
         if (mask & (1 << k)) {
             changed.push([
                 k,
-                repairShortestPaths(g, st.paths[k], e, ctx.sourceEuclid[k])
+                repairShortestPaths(g, st.paths[k], e, ctx.sourceEuclid[k], commit)
             ]);
         }
     }

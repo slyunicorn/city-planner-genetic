@@ -17,6 +17,8 @@ function draw() {
 
     drawLandCoverCells();
 
+    drawDensitySpots();
+
     drawUrquhart();
 
     drawFacilities();

@@ -22,6 +22,31 @@ flatPullSlider.addEventListener(
 
         flatPullValue.textContent =
             Number(flatPullSlider.value).toFixed(1);
+
+        // Flatness also decides where hotspots go.
+        drawDensitySpots();
+    }
+);
+
+centreDensitySlider.addEventListener(
+    "input",
+    () => {
+
+        centreDensityValue.textContent =
+            Number(centreDensitySlider.value).toFixed(1);
+
+        drawDensitySpots();
+    }
+);
+
+hotspotSlider.addEventListener(
+    "input",
+    () => {
+
+        hotspotValue.textContent =
+            hotspotSlider.value;
+
+        drawDensitySpots();
     }
 );
 

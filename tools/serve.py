@@ -52,8 +52,9 @@ INDEX_MAX_AGE_S = 30 * 24 * 3600
 # Refuse absurd requests (the app's largest sensible radius is tens of km).
 MAX_BBOX_DEG = 3.0
 
-# Bump when the raster format or classes change, to ignore old cache files.
-CACHE_VERSION = "1"
+# Bump when the raster format, classes or feature selection change, to
+# ignore old cache files. 2: ways picked by bounding box (way index).
+CACHE_VERSION = "2"
 
 
 jobs = {}
@@ -219,6 +220,10 @@ def ensure_pbf(region, job):
                          "(one time per region, about 2 min)")
         osm_landcover.filter_pbf(path, filtered, log=lambda s: print("[landcover]", s))
 
+        # Way bounding boxes, so the first area needs no extra wait.
+        job_message(job, f"Indexing '{region['name']}' (one time per region)")
+        osm_landcover.prepare_way_index(filtered, log=lambda s: print("[landcover]", s))
+
     return filtered
 
 
@@ -304,6 +309,9 @@ def prefetch(region_id):
     for i, r in enumerate(todo, 1):
         print(f"[{i}/{len(todo)}] {r['name']}")
         if is_ready(r):
+            # Regions prepared before the way index existed get one now.
+            osm_landcover.prepare_way_index(region_paths(r)[1],
+                                            log=lambda s: print("[landcover]", s))
             print("  already prepared")
             continue
         ensure_pbf(r, {"console": True})
