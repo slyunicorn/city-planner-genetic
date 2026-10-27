@@ -8,66 +8,31 @@
 // ============================================================
 //
 // Removes redundant roads one at a time, probabilistically,
-// while never breaking three hard invariants:
+// while never breaking the hard rules (roads-quality.js,
+// qualityCanRemove()):
 //
-//     for every cell c:  degree(c) >= 1
-//     components(graph) == 1
-//     alpha/beta/gamma stay inside their target ranges
+//     the network stays in one piece
+//     no facility (or OD sample node) is cut off
+//     every buildable block keeps a road at one of its corners
 //
-// A candidate removal is scored by how much it improves the
-// graph (dQ), converted to a probability through a sigmoid, and
-// then sampled - so the algorithm prefers good removals without
-// being deterministic, and two runs give different cities.
+// A candidate removal is scored by how much it changes the
+// network quality Q (roads-quality.js: NC, RS and BB metric
+// groups minus a road-cost term), converted to a probability
+// through a sigmoid, and then sampled - so the algorithm prefers
+// good removals without being deterministic, and two runs give
+// different cities. How far it goes is the road budget.
 //
 // "Cell" here means a node of the road graph: a junction, or a
 // facility hanging off a spur. Its degree is how many roads
 // meet it, and each incident road arrives from its own side.
 // ============================================================
 
-// Target ranges. A removal that pushes a metric outside its
-// range is rejected outright, which is what stops the process
-// from stripping the network down to a tree.
-// alpha/beta/gamma are no longer constraints. They are computed
-// and reported, but nothing is ever rejected for leaving a
-// range. The only hard rules left are structural:
-//
-//     every cell keeps degree >= 1
-//     the graph stays a single component
-//
-// What decides how far simplification goes is now a direct road
-// budget: keep removing until the requested share of total road
-// length is gone, or nothing else can safely come out.
-//
-// Kept only as the reference band the readout compares against.
+// Reference band for alpha: RS3 scores 1 inside it. beta and
+// gamma are reported against theirs but not scored (they measure
+// nearly the same thing as alpha).
 const SPEC_ALPHA_RANGE = [0.20, 0.45];
 const SPEC_BETA_RANGE = [1.30, 1.80];
 const SPEC_GAMMA_RANGE = [0.40, 0.60];
-
-// Redundancy that the quality function SOFTLY prefers to keep.
-// A soft preference, not a floor: it makes removals that gut
-// the network's redundancy less likely, without ever forbidding
-// one. Without some term like this the sigmoid saturates at
-// P = 1 and the process stops being probabilistic at all.
-const ALPHA_REFERENCE = 0.35;
-
-
-// Weight on total road cost. This is the term that drives
-// simplification: every road removed cuts total build length,
-// so Q rises. It has to outweigh the residual centre pull in
-// rangeScore(), or removals score negative and never fire.
-const COST_WEIGHT = 3.0;
-
-// Weight on the road-length penalty in the quality function.
-const LENGTH_LAMBDA = 0.35;
-
-// Weight on the side-diversity reward.
-const DIVERSITY_WEIGHT = 0.15;
-
-// Sigmoid sharpness. With the cost term in place a single
-// removal shifts Q by ~4e-3, so k on the order of 1/|dQ| (a few
-// hundred) is what puts probabilities in a useful spread rather
-// than pinning them all at 0 or 1.
-const DEFAULT_SIGMOID_K = 300;
 
 
 // ------------------------------------------------------------
@@ -150,9 +115,40 @@ function aliveEdgeList(graph) {
 // Metrics
 // ------------------------------------------------------------
 
+// Nodes that still have a road; a pruned dead end has none and
+// is no longer part of the network.
+function activeGraphNodes(graph) {
+
+    let v = 0;
+
+    for (const d of graph.degree) {
+        if (d > 0) {
+            v++;
+        }
+    }
+
+    return v;
+}
+
+
+// Lowest degree among nodes that still have a road.
+function minActiveDegree(graph) {
+
+    let min = Infinity;
+
+    for (const d of graph.degree) {
+        if (d > 0 && d < min) {
+            min = d;
+        }
+    }
+
+    return min === Infinity ? 0 : min;
+}
+
+
 function calculateAlpha(graph) {
 
-    const v = graph.nodes.length;
+    const v = activeGraphNodes(graph);
     const e = graph.aliveEdges;
     const p = countGraphComponents(graph);
 
@@ -166,15 +162,17 @@ function calculateAlpha(graph) {
 
 function calculateBeta(graph) {
 
-    return graph.nodes.length > 0
-        ? graph.aliveEdges / graph.nodes.length
+    const v = activeGraphNodes(graph);
+
+    return v > 0
+        ? graph.aliveEdges / v
         : 0;
 }
 
 
 function calculateGamma(graph) {
 
-    const v = graph.nodes.length;
+    const v = activeGraphNodes(graph);
     const p = countGraphComponents(graph);
 
     const den = 3 * (v - 2 * p);
@@ -213,7 +211,7 @@ function countGraphComponents(graph) {
 
     for (let start = 0; start < n; start++) {
 
-        if (seen[start]) {
+        if (seen[start] || graph.degree[start] === 0) {
             continue;
         }
 
@@ -342,38 +340,25 @@ function calculateSideDiversity(graph, cell) {
 
 
 // ------------------------------------------------------------
-// Quality
+// Quality and hard rules (both live in roads-quality.js)
 // ------------------------------------------------------------
-//
-// Soft redundancy preference: 1.0 at or above the reference
-// alpha, tapering to 0 as the network approaches a tree. No
-// hard edges, so it can never veto a removal - it only makes
-// removals that strip redundancy score a little worse.
-function calculateConnectivityScore(graph) {
 
-    return Math.min(
-        1,
-        calculateAlpha(graph) / ALPHA_REFERENCE
-    );
+function qualityStateOf(graph) {
+    return graph.quality || attachQualityModel(graph);
 }
 
 
-function calculateRoadLengthPenalty(graph, edgeIndex) {
-
-    return graph.edges[edgeIndex].length / graph.maxLength;
+function calculateGraphQuality(graph) {
+    return qualityStateOf(graph).current.Q;
 }
 
 
-// Mean normalised road length across the surviving network.
-// Dropping a long road lowers this, which raises quality.
-function meanLengthPenalty(graph) {
+// Total build cost of the surviving network, 0..1 against the
+// original. Every removal lowers it; removing a LONG road
+// lowers it more.
+function calculateNetworkCost(graph) {
 
-    if (graph.aliveEdges === 0) {
-        return 0;
-    }
-
-    return (graph.totalLength / graph.aliveEdges) /
-        graph.maxLength;
+    return graph.totalLength / graph.baseTotalLength;
 }
 
 
@@ -394,84 +379,28 @@ function averageSideDiversity(graph) {
 }
 
 
-// Total build cost of the surviving network, 0..1 against the
-// original. Every removal lowers it; removing a LONG road
-// lowers it more.
-function calculateNetworkCost(graph) {
-
-    return graph.totalLength / graph.baseTotalLength;
-}
-
-
-function calculateGraphQuality(graph) {
-
-    return calculateConnectivityScore(graph) +
-        DIVERSITY_WEIGHT * averageSideDiversity(graph) -
-        LENGTH_LAMBDA * meanLengthPenalty(graph) -
-        COST_WEIGHT * calculateNetworkCost(graph);
-}
-
-
-// ------------------------------------------------------------
-// Hard constraints
-// ------------------------------------------------------------
-
 // Populated by simplifyRoadNetwork so a run that removes
-// nothing can say exactly which constraint was binding.
+// nothing can say exactly which rule was binding.
 let removalRejections = {
-    degree: 0,
     disconnect: 0,
+    required: 0,
+    access: 0,
     accepted: 0
 };
 
 function isValidEdgeRemoval(graph, edgeIndex) {
+    return qualityCanRemove(qualityStateOf(graph), edgeIndex);
+}
 
-    const e = graph.edges[edgeIndex];
 
-    if (!e.alive) {
-        return false;
+// Remove a road for good, keeping the quality state in step.
+function removeRoad(graph, edgeIndex) {
+
+    if (graph.quality) {
+        qualityEvaluateRemoval(graph.quality, edgeIndex, true);
+    } else {
+        setEdgeAlive(graph, edgeIndex, false);
     }
-
-    // Never strand a cell: its last road is untouchable.
-    if (
-        getCellDegree(graph, e.a) <= 1 ||
-        getCellDegree(graph, e.b) <= 1
-    ) {
-        removalRejections.degree++;
-        return false;
-    }
-
-    // Try it and check the whole graph.
-    setEdgeAlive(graph, edgeIndex, false);
-
-    let valid = true;
-
-    // Every cell still has a road.
-    for (let i = 0; i < graph.nodes.length; i++) {
-        if (!isCellConnected(graph, i)) {
-            valid = false;
-            break;
-        }
-    }
-
-    // Still one piece.
-    if (valid && !isGraphConnected(graph)) {
-        valid = false;
-        removalRejections.disconnect++;
-    }
-
-    // No alpha/beta/gamma gate. The structural rules above are
-    // the only hard constraints; how far the network is allowed
-    // to shrink is decided by the road budget in
-    // simplifyRoadNetwork(), not by a metric range.
-
-    setEdgeAlive(graph, edgeIndex, true);
-
-    if (valid) {
-        removalRejections.accepted++;
-    }
-
-    return valid;
 }
 
 
@@ -481,19 +410,16 @@ function isValidEdgeRemoval(graph, edgeIndex) {
 
 function calculateRemovalProbability(graph, edgeIndex, k) {
 
-    if (!isValidEdgeRemoval(graph, edgeIndex)) {
+    const st = qualityStateOf(graph);
+
+    if (!qualityCanRemove(st, edgeIndex)) {
         return 0;
     }
 
-    const before = calculateGraphQuality(graph);
+    const dQ =
+        qualityEvaluateRemoval(st, edgeIndex, false).Q - st.current.Q;
 
-    setEdgeAlive(graph, edgeIndex, false);
-    const after = calculateGraphQuality(graph);
-    setEdgeAlive(graph, edgeIndex, true);
-
-    const dQ = after - before;
-
-    return 1 / (1 + Math.exp(-(k ?? DEFAULT_SIGMOID_K) * dQ));
+    return 1 / (1 + Math.exp(-(k ?? st.ctx.k ?? 300) * dQ));
 }
 
 

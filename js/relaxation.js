@@ -5,98 +5,137 @@
 
 
 // ============================================================
-// FAKE CENTROID (flatness-weighted, then shifted toward blue)
+// FAKE CENTROID (weighted by flatness, then optionally shifted
+// toward low ground)
 // ============================================================
 //
-// Two terrain terms, applied in order:
+// 1. FLATNESS (Sobel). The cell's centroid is taken over its
+//    whole interior, sampled on a small grid, with every sample
+//    weighted by how flat the ground under it is:
 //
-//   1. FLATNESS (Sobel). Instead of averaging the cell's
-//      vertices equally, each vertex is weighted by how flat
-//      the ground is under it. Vertices on flat land pull the
-//      centroid hard; vertices on a steep slope barely pull at
-//      all. The centroid therefore drifts onto buildable ground
-//      without needing a separate force.
+//        S(p)  = normalised Sobel slope at p   (0 flat .. 1 steep;
+//                black .. white on the Sobel map)
+//        w(p)  = ((1 - S(p))^GAMMA + EPSILON) * rho(p)^2
+//                (0 where isLand(p) is false)
+//        C     = SUM(w(p) * p) / SUM(w(p))
 //
-//   2. ELEVATION (blueness). The flat-weighted centroid is then
-//      shifted along the average blue direction, by an amount
-//      proportional to how much bluer the cell's ring is than
-//      the centroid's own spot, exactly as before.
+//    So the centroid sits on the darkest (flattest) part of the
+//    cell, and repeated relaxation (weighted Lloyd) gathers the
+//    points onto flat ground. GAMMA is the "Flat-ground pull"
+//    slider: 0 ignores slope, higher only the flattest ground
+//    counts.
 //
-// Formula, for a cell with vertices v1..vn:
+//    rho(p) is the city density profile (poisson.js). Plain Lloyd
+//    spreads points evenly and would undo the sparse-at-the-edge
+//    layout; a weighted Lloyd gives point density ~ w^(1/2) in
+//    2-D, so weighting by rho^2 keeps points ~ rho per area.
 //
-//   S(p)  = normalised Sobel slope at p      (0 flat .. 1 steep)
-//   t(p)  = normalised elevation at p        (0 low  .. 1 high)
+// 2. ELEVATION (optional, "Low-ground pull" slider, default 0).
+//    C is then shifted along the average direction to lower
+//    ground, by how much lower the cell's ring is than C:
 //
-//   wi    = (1 - S(vi))^GAMMA + EPSILON      flatness weight
-//   C     = SUM(wi * vi) / SUM(wi)           flat-biased centroid
+//        bi    = 1 - t(vi)                  t = normalised height
+//        dhat  = normalise( SUM( bi * (vi - C)/|vi - C| ) )
+//        C'    = C + dhat * max(0, mean(bi) - (1 - t(C))) * r * STRENGTH
 //
-//   bi    = 1 - t(vi)                        blueness per vertex
-//   bmean = mean(bi)
-//   bC    = 1 - t(C)
-//   dhat  = normalise( SUM( bi * (vi - C)/|vi - C| ) )
-//   r     = mean |vi - C|                    cell radius
-//
-//   C'    = C + dhat * max(0, bmean - bC) * r * STRENGTH
-//
-// With GAMMA = 0 the weights collapse to 1 and C is the plain
-// mean, i.e. the original behaviour.
+//    Lower is not the same as flatter (a valley side is low and
+//    steep), so this is off unless asked for.
 // ============================================================
 
-// How sharply flat ground is preferred. 0 = ignore slope,
-// 1 = linear, higher = only the flattest vertices matter.
-const FLATNESS_GAMMA = 2.0;
-
-// Floor so an all-steep cell still has a defined centroid
-// rather than dividing by zero.
+// Floor so an all-steep cell still has a defined centroid.
 const FLATNESS_EPSILON = 0.05;
 
-// How far (in cell radii) a full 1.0 blueness difference moves
-// the centroid. Higher = more aggressive elevation seeking.
-const COLOR_SHIFT_STRENGTH = 1.5;
+// Samples across a cell, per side (so up to ~SAMPLES^2 inside).
+const CENTROID_SAMPLES = 8;
 
-function getFakeCentroid(polygon) {
+function flatnessGamma() {
+    return Number(flatPullSlider.value);
+}
+
+function lowGroundStrength() {
+    return Number(lowPullSlider.value);
+}
+
+function getFakeCentroid(polygon, density) {
 
     if (!polygon || polygon.length === 0) {
         return null;
     }
 
     // --------------------------------------------------------
-    // 1. Flatness-weighted centroid
-    //    wi = (1 - S(vi))^GAMMA + EPSILON
-    //    C  = SUM(wi * vi) / SUM(wi)
+    // 1. Flatness-weighted centroid over the cell's interior
     // --------------------------------------------------------
+
+    const gamma = flatnessGamma();
+
+    const useSlope = slopeData && gamma > 0;
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    for (const [x, y] of polygon) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+    }
+
+    const step =
+        Math.max(0.75, Math.max(maxX - minX, maxY - minY) / CENTROID_SAMPLES);
 
     let sumX = 0;
     let sumY = 0;
     let sumW = 0;
 
-    const useSlope =
-        slopeData && FLATNESS_GAMMA > 0;
+    for (let y = minY + step / 2; y < maxY; y += step) {
+        for (let x = minX + step / 2; x < maxX; x += step) {
 
-    for (const vertex of polygon) {
+            // Ground the block could never use (water, forest,
+            // too steep for land cover, ...) carries no weight;
+            // otherwise its pull piles points up on its edge,
+            // where the move into it is refused.
+            if (!d3.polygonContains(polygon, [x, y]) || !isLand(x, y)) {
+                continue;
+            }
 
-        const weight =
-            useSlope
-                ? Math.pow(
-                      1 - getSlopeAt(vertex[0], vertex[1]),
-                      FLATNESS_GAMMA
-                  ) + FLATNESS_EPSILON
-                : 1;
+            const flat =
+                useSlope
+                    ? Math.pow(1 - getSlopeAt(x, y), gamma) + FLATNESS_EPSILON
+                    : 1;
 
-        sumX += vertex[0] * weight;
-        sumY += vertex[1] * weight;
+            const rho =
+                density ? Math.max(POISSON_DENSITY_CUTOFF, density.at(x, y)) : 1;
 
-        sumW += weight;
+            const weight = flat * rho * rho;
+
+            sumX += x * weight;
+            sumY += y * weight;
+            sumW += weight;
+        }
     }
 
+    // A sliver too thin for the grid: fall back to its corners.
     if (sumW <= 0) {
-        return null;
+
+        for (const [x, y] of polygon) {
+            sumX += x;
+            sumY += y;
+            sumW += 1;
+        }
     }
 
     const centroid = {
         x: sumX / sumW,
         y: sumY / sumW
     };
+
+    const shiftStrength = lowGroundStrength();
+
+    if (shiftStrength <= 0) {
+        return centroid;
+    }
 
     // Without terrain data there's no height to steer by.
     if (!elevationData) {
@@ -164,7 +203,7 @@ function getFakeCentroid(polygon) {
     const shift =
         difference *
         cellRadius *
-        COLOR_SHIFT_STRENGTH;
+        shiftStrength;
 
     return {
         x: centroid.x + (dirX / dirMagnitude) * shift,
@@ -212,6 +251,13 @@ function relaxPoints() {
         getBoundaryPolygonPoints(200)
             .map(q => [q.x, q.y]);
 
+    // The edge density profile, so relaxing keeps blocks sparse
+    // near the boundary (null when there is no falloff).
+    const field = getCityDensityField();
+
+    const density =
+        field && field.falloff > 0 ? field : null;
+
     // --------------------------------------------------------
     // LERP each point toward its cell's fake centroid. That
     // centroid is already colour-steered - getFakeCentroid()
@@ -244,7 +290,7 @@ function relaxPoints() {
             clipped.length >= 3 ? clipped : cell;
 
         const centroid =
-            getFakeCentroid(polygon);
+            getFakeCentroid(polygon, density);
 
         if (!centroid) {
             continue;

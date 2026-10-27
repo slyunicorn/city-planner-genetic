@@ -198,6 +198,25 @@
                 <input id="kSlider" type="range" min="1" max="100" value="30">
             </div>
 
+            <div class="control-section">
+                <label>
+                    <span>Edge density falloff</span>
+                    <span><span id="densityFalloffValue">50</span>%</span>
+                </label>
+
+                <input id="densityFalloffSlider" type="range" min="0" max="100" step="5" value="50">
+
+                <div class="hint">
+                    Inside the closed city, blocks are sparse at the
+                    boundary and get denser going in, levelling off
+                    at spacing R. This is how far in (as a share of
+                    the way to the deepest point) the density keeps
+                    rising. 0% = the same density everywhere.
+                    Applied when the city closes; changing it later
+                    regenerates the points.
+                </div>
+            </div>
+
             <button id="generateBtn">
                 Generate Poisson Points
             </button>
@@ -213,6 +232,37 @@
                 </label>
 
                 <input id="relaxIterationsSlider" type="range" min="1" max="300" value="50">
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Flat-ground pull</span>
+                    <span id="flatPullValue">4.0</span>
+                </label>
+
+                <input id="flatPullSlider" type="range" min="0" max="8" step="0.5" value="4">
+
+                <div class="hint">
+                    Relaxation moves each point to the flatness-
+                    weighted centre of its cell (darker on the Sobel
+                    map = flatter = heavier). Higher = only the
+                    flattest ground counts. 0 = ignore slope.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Low-ground pull</span>
+                    <span id="lowPullValue">0.0</span>
+                </label>
+
+                <input id="lowPullSlider" type="range" min="0" max="3" step="0.1" value="0">
+
+                <div class="hint">
+                    Extra push toward lower elevation. Lower is not
+                    always flatter (valley sides are steep), so it
+                    is off by default.
+                </div>
             </div>
 
             <button id="relaxBtn" disabled>
@@ -329,23 +379,69 @@
 
                 <div class="hint">
                     Share of total road length to remove. The run
-                    stops when the budget is met, or when every
-                    remaining road is either a cell's only link or
-                    a bridge.
+                    stops when the budget is met, or when no road
+                    left can go without cutting the network, a
+                    facility or a block's access.
                 </div>
             </div>
 
             <div class="control-section">
                 <label>
-                    <span>Removal bias k</span>
-                    <span id="simplifyKValue">300</span>
+                    <span>Quality weight: junctions (NC)</span>
+                    <span id="weightNcValue">30</span>
                 </label>
 
-                <input id="simplifyKSlider" type="range" min="50" max="3000" step="50" value="300">
+                <input id="weightNcSlider" type="range" min="0" max="100" step="5" value="30">
+
+                <label>
+                    <span>Quality weight: routes (RS)</span>
+                    <span id="weightRsValue">40</span>
+                </label>
+
+                <input id="weightRsSlider" type="range" min="0" max="100" step="5" value="40">
+
+                <label>
+                    <span>Quality weight: blocks (BB)</span>
+                    <span id="weightBbValue">30</span>
+                </label>
+
+                <input id="weightBbSlider" type="range" min="0" max="100" step="5" value="30">
 
                 <div class="hint">
-                    Sigmoid sharpness. Low k removes near-randomly,
-                    high k only removes clear improvements.
+                    What a good network means when choosing which
+                    roads to drop. NC: junction spacing, degree,
+                    angles, dead ends. RS: detours, loops,
+                    straightness. BB: block size and shape.
+                    Rescaled to sum to 100%.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Cost weight λ</span>
+                    <span id="costWeightValue">1.0</span>
+                </label>
+
+                <input id="costWeightSlider" type="range" min="0" max="5" step="0.1" value="1">
+
+                <div class="hint">
+                    How much shorter total road length counts in Q.
+                    Higher favours dropping long roads.
+                </div>
+            </div>
+
+            <div class="control-section">
+                <label>
+                    <span>Removal sharpness</span>
+                    <span id="simplifyKValue">2.0</span>
+                </label>
+
+                <input id="simplifyKSlider" type="range" min="0.2" max="5" step="0.1" value="2">
+
+                <div class="hint">
+                    Sigmoid k is set each run to this ÷ the typical
+                    |ΔQ|. Low removes near-randomly, high only
+                    removes clear improvements.
                 </div>
             </div>
 
@@ -431,9 +527,19 @@
             </button>
 
             <div class="hint indent">
-                Probabilistic. Targets α 0.20–0.45, β 1.30–1.80,
-                γ 0.40–0.60. Never strands a cell or splits the
-                graph. Each run differs.
+                Probabilistic: removes the roads that cost the
+                quality score least, until the road budget is met.
+                Never splits the network, cuts off a facility or
+                leaves a block without a road. Each run differs.
+            </div>
+
+            <button id="metricsPageBtn" class="ghost">
+                Open metrics page
+            </button>
+
+            <div class="hint indent">
+                Charts and tables of every quality metric, live
+                while Simplify runs, in a separate tab.
             </div>
 
             <div id="roadStats">Enable the Building Network layer to measure.</div>
@@ -553,6 +659,8 @@
 <script src="js/urquhart.js"></script>
 <script src="js/roads-network.js"></script>
 <script src="js/roads-simplify.js"></script>
+<script src="js/roads-quality.js"></script>
+<script src="js/metrics-feed.js"></script>
 <script src="js/roads-junctions.js"></script>
 <script src="js/roads-stepwise.js"></script>
 <script src="js/roads-straighten.js"></script>

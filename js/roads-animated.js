@@ -64,7 +64,7 @@ function runRoadSimplification() {
     const reduction =
         Number(reductionSlider.value) / 100;
 
-    const k =
+    const sharpness =
         Number(simplifyKSlider.value);
 
     const attempts =
@@ -93,6 +93,66 @@ function runRoadSimplification() {
         `(radius ${picked.radius}, none adjacent).`
     );
 
+    // One quality context for the whole run, so every attempt is
+    // scored against the same blocks, OD sample and references.
+    const qualityCtx =
+        createQualityContext(nodes, baseEdges, {
+            blocks: getBlockCells(),
+            weights: {
+                nc: Number(weightNcSlider.value),
+                rs: Number(weightRsSlider.value),
+                bb: Number(weightBbSlider.value)
+            },
+            costWeight: Number(costWeightSlider.value)
+        });
+
+    const startState =
+        createQualityState(makeRoadGraph(nodes, baseEdges), qualityCtx);
+
+    const calibration =
+        calibrateRemovalK(startState, sharpness);
+
+    const k = calibration.k;
+
+    const baseTotalLength =
+        startState.graph.baseTotalLength;
+
+    logStep(
+        `Start: ${qualityLabel(startState.current)}. ` +
+        `k calibrated to ${k.toFixed(0)} ` +
+        `(sharpness ${sharpness} ÷ typical |ΔQ| ` +
+        `${calibration.typical.toExponential(1)}, ` +
+        `${calibration.sampled} removals sampled).`
+    );
+
+    base.qualityStart = startState.current;
+
+    // Counted per run, for the metrics page.
+    removalRejections = { disconnect: 0, required: 0, access: 0, accepted: 0 };
+
+    metricsFeed.startRun({
+        id: Date.now(),
+        startedAt: new Date().toISOString(),
+        nodes: nodes.length,
+        edges: baseEdges.length,
+        facilities: base.linkedFacilities,
+        metresPerPixel,
+        R,
+        budget: reduction,
+        attemptsPlanned: attempts,
+        weights: qualityCtx.weights,
+        costWeight: qualityCtx.costWeight,
+        sharpness,
+        k,
+        typicalDQ: calibration.typical,
+        junctionsOnly: useJunctions,
+        scoreKeys: METRIC_SCORE_KEYS,
+        rawKeys: METRIC_RAW_KEYS,
+        groupWeights: { nc: NC_WEIGHTS, rs: RS_WEIGHTS, bb: BB_WEIGHTS },
+        metrics: qualityMetricDefinitions(qualityCtx),
+        start: qualityHistoryPoint(startState.current, null, "start")
+    });
+
     simplifyBtn.textContent = "Stop";
 
     // Buildings belong to the FINAL network only; hide any from a
@@ -117,6 +177,15 @@ function runRoadSimplification() {
 
         run.graph = makeRoadGraph(nodes, baseEdges);
 
+        const st = createQualityState(run.graph, qualityCtx);
+
+        // One point per removed road, for the metrics page; the
+        // first point is the untouched network.
+        st.history = [qualityHistoryPoint(st.current, null, "start")];
+        st.phase = "random";
+
+        metricsFeed.beginAttempt(run.attempt, st.history);
+
         run.runner =
             createSimplifyRunner(run.graph, {
                 k,
@@ -128,8 +197,15 @@ function runRoadSimplification() {
 
     function scoreAttempt(graph) {
 
+        const score = graph.quality.current;
+
         return {
-            quality: calculateGraphQuality(graph),
+            quality: score.Q,
+            structural: score.structural,
+            score,
+            // Attempts are compared at the same road budget: only
+            // the structure counts, not who overshot the budget.
+            budgetMet: score.cost <= 1 - reduction + 1e-9,
             alive: graph.edges.map(e => e.alive),
             removed: run.runner.removed,
             edges: graph.aliveEdges,
@@ -137,7 +213,7 @@ function runRoadSimplification() {
             beta: calculateBeta(graph),
             gamma: calculateGamma(graph),
             components: countGraphComponents(graph),
-            minDegree: Math.min(...graph.degree),
+            minDegree: minActiveDegree(graph),
             totalLength: graph.totalLength,
             cost: calculateNetworkCost(graph),
             diversity: averageSideDiversity(graph)
@@ -170,10 +246,30 @@ function runRoadSimplification() {
 
         const champ = run.champion;
 
+        // Safety net for the hard rules: put back the shortest
+        // removed roads that reconnect any facility or block that
+        // lost its access. The removal rules should make this a
+        // no-op.
+        const alive = champ.alive.slice();
+
+        const repair =
+            repairRequiredAccess(qualityCtx, alive);
+
+        base.repair = repair;
+
+        logStep(
+            `Access check: ${repair.facilities} facilities and ` +
+            `${repair.blocks} blocks need a road; ` +
+            (repair.restored
+                ? `${repair.restored} removed roads put back to ` +
+                  `reconnect ${repair.repaired}.`
+                : "all reachable, nothing to repair.")
+        );
+
         const kept = [];
 
         baseEdges.forEach(([a, b], i) => {
-            if (champ.alive[i]) {
+            if (alive[i]) {
                 kept.push([a, b]);
             }
         });
@@ -192,17 +288,19 @@ function runRoadSimplification() {
 
         base.roadIndices =
             connectivityIndices(
-                base.roadNodeCount,
+                activeNodeCount(base.roadNodeCount, base.edges),
                 base.edges.length,
                 countComponents(base.roadNodeCount, base.edges)
             );
 
         base.fullIndices =
             connectivityIndices(
-                nodes.length,
+                activeNodeCount(nodes.length, kept),
                 kept.length,
-                champ.components
+                countComponents(nodes.length, kept)
             );
+
+        base.quality = champ.score;
 
         base.totalLength = champ.totalLength;
 
@@ -240,10 +338,23 @@ function runRoadSimplification() {
 
             logStep("Simplification removed nothing.");
 
+            metricsFeed.endRun({ status: "empty" });
+
             return;
         }
 
         applyChampion();
+
+        metricsFeed.endRun({
+            status: run.cancelled ? "stopped" : "finishing",
+            champion: run.champion.attempt,
+            rejections: { ...removalRejections },
+            repair: base.repair
+        });
+
+        // Positions before any straightening, to validate against.
+        run.beforeStraighten =
+            nodes.map(p => ({ x: p.x, y: p.y, kind: p.kind }));
 
         // Final relaxation: straighten the chains, animated.
         const straightenIterations =
@@ -372,6 +483,8 @@ function runRoadSimplification() {
 
     function finishBuild() {
 
+        validateAndRescore();
+
         reclassifyCrossings(base);
 
         buildingsReady = true;
@@ -381,6 +494,66 @@ function runRoadSimplification() {
         logStep(`Buildings: ${shownBuildingCount} placed.`);
 
         report();
+    }
+
+
+    // Straightening moved points; a moved road may now cross
+    // unbuildable ground, leave the city or cross another road.
+    // Undo those moves, then score the network before and after
+    // straightening on the same scale as the attempts.
+    function validateAndRescore() {
+
+        const before = run.beforeStraighten;
+
+        if (!before) {
+            return;
+        }
+
+        const check = validateStraightenedNetwork(base, before);
+
+        const scoreBefore =
+            scoreNetwork(before, base.allEdges, qualityCtx, baseTotalLength);
+
+        const scoreAfter =
+            scoreNetwork(nodes, base.allEdges, qualityCtx, baseTotalLength);
+
+        base.quality = scoreAfter;
+
+        metricsFeed.endRun({
+            status: run.cancelled ? "stopped" : "done",
+            champion: run.champion.attempt,
+            beforeStraightening: qualityHistoryPoint(scoreBefore, null, "final"),
+            afterStraightening: qualityHistoryPoint(scoreAfter, null, "final"),
+            finalCheck: check
+        });
+
+        const parts = [];
+
+        if (check.reasons.ground) {
+            parts.push(`${check.reasons.ground} over unbuildable ground`);
+        }
+
+        if (check.reasons.city) {
+            parts.push(`${check.reasons.city} outside the city`);
+        }
+
+        if (check.reasons.crossing) {
+            parts.push(`${check.reasons.crossing} crossing another road`);
+        }
+
+        const components =
+            countComponents(nodes.length, base.allEdges);
+
+        logStep(
+            `Final check: ` +
+            (check.restored
+                ? `${check.restored} straightened points put back ` +
+                  `(roads ${parts.join(", ")}). `
+                : "straightening broke no road. ") +
+            `${components === 1 ? "Still one network" : `${components} pieces!`}. ` +
+            `Before straightening ${qualityLabel(scoreBefore)}, ` +
+            `after ${qualityLabel(scoreAfter)}.`
+        );
     }
 
 
@@ -427,11 +600,13 @@ function runRoadSimplification() {
 
         paint(run.graph);
 
+        metricsFeed.progress(run.attempt);
+
         status.textContent =
             `Attempt ${run.attempt}/${attempts} · ` +
             `−${run.runner.removed} roads` +
             (run.champion
-                ? ` · best so far ${run.champion.quality.toFixed(4)} ` +
+                ? ` · best so far ${run.champion.structural.toFixed(4)} ` +
                   `(attempt ${run.champion.attempt})`
                 : "");
 
@@ -441,28 +616,52 @@ function runRoadSimplification() {
 
             result.attempt = run.attempt;
 
-            // Keep it only if it beats the incumbent.
+            metricsFeed.endAttempt(run.attempt, {
+                structural: result.structural,
+                Q: result.quality,
+                nc: result.score.nc,
+                rs: result.score.rs,
+                bb: result.score.bb,
+                cost: result.cost,
+                removed: result.removed,
+                greedy: run.runner.greedyRemoved,
+                passes: run.runner.pass,
+                budgetMet: result.budgetMet,
+                alpha: result.alpha
+            });
+
+            // Keep it only if it beats the incumbent: meeting the
+            // road budget first, then structural quality (the cost
+            // term is left out, so a network is not preferred just
+            // for being a little shorter).
+            const champ = run.champion;
+
             const better =
-                !run.champion ||
-                result.quality > run.champion.quality;
+                !champ ||
+                (result.budgetMet && !champ.budgetMet) ||
+                (result.budgetMet === champ.budgetMet &&
+                    result.structural > champ.structural);
 
             if (better) {
 
                 run.champion = result;
 
                 logStep(
-                    `Attempt ${run.attempt}: quality ` +
-                    `${result.quality.toFixed(4)} — new best ` +
+                    `Attempt ${run.attempt}: structure ` +
+                    `${result.structural.toFixed(4)}, ` +
+                    `${qualityLabel(result.score)} — new best ` +
                     `(−${result.removed} roads, α ` +
-                    `${result.alpha.toFixed(3)}).`
+                    `${result.alpha.toFixed(3)}` +
+                    `${result.budgetMet ? "" : ", budget NOT met"}).`
                 );
 
             } else {
 
                 logStep(
-                    `Attempt ${run.attempt}: quality ` +
-                    `${result.quality.toFixed(4)} — kept ` +
-                    `attempt ${run.champion.attempt} instead.`
+                    `Attempt ${run.attempt}: structure ` +
+                    `${result.structural.toFixed(4)} — kept ` +
+                    `attempt ${run.champion.attempt} instead` +
+                    `${result.budgetMet ? "" : " (budget not met)"}.`
                 );
             }
 

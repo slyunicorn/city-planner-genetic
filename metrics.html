@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Road Metrics</title>
+
+<style>
+:root {
+    color-scheme: dark;
+
+    --page: #0d0d0d;
+    --surface-1: #1a1a19;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+
+    /* Categorical slots 1-4 (dark steps), validated as a set. */
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+
+    --good: #0ca30c;
+    --critical: #d03b3b;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+main {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 24px 16px 64px;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 600;
+}
+
+.title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+
+.pill {
+    padding: 2px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.pill::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    vertical-align: 0;
+}
+
+.pill.live::before {
+    background: var(--good);
+}
+
+.sub {
+    margin: 6px 0 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.empty {
+    margin-top: 48px;
+    padding: 32px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-1);
+    color: var(--text-secondary);
+}
+
+.tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 12px;
+    margin: 20px 0;
+}
+
+.tile {
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-1);
+}
+
+.tile .label {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.tile .value {
+    margin-top: 2px;
+    font-size: 26px;
+    font-weight: 600;
+}
+
+.tile .delta {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.delta.up {
+    color: var(--good);
+}
+
+.delta.down {
+    color: var(--critical);
+}
+
+.card {
+    margin-top: 16px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-1);
+}
+
+.card h2 {
+    margin: 0 0 2px;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.card .note {
+    margin: 0 0 12px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    margin: 4px 0 16px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.seg {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.seg button {
+    padding: 3px 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    cursor: pointer;
+}
+
+.seg button:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.seg button[aria-pressed="true"] {
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.step-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.step-control input {
+    width: 220px;
+    max-width: 50vw;
+}
+
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin: 0 0 8px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.legend .key {
+    display: inline-block;
+    width: 16px;
+    height: 2px;
+    margin-right: 6px;
+    vertical-align: middle;
+    border-radius: 1px;
+}
+
+.legend .key.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.chart {
+    width: 100%;
+}
+
+.chart svg {
+    display: block;
+    overflow: visible;
+}
+
+.multiples {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px 20px;
+}
+
+.multiple h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.multiple .rule {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.multiple .now {
+    margin: 2px 0 4px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.multiple .now strong {
+    color: var(--text-primary);
+}
+
+/* SVG chrome */
+.grid line {
+    stroke: var(--grid);
+    stroke-width: 1;
+}
+
+.axis path,
+.axis line {
+    stroke: var(--axis);
+}
+
+.axis text,
+.axis-label,
+.end-label {
+    fill: var(--text-muted);
+    font: 11px system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-variant-numeric: tabular-nums;
+}
+
+.end-label {
+    fill: var(--text-secondary);
+}
+
+.baseline {
+    stroke: var(--axis);
+    stroke-width: 1;
+}
+
+.marker {
+    stroke: var(--text-muted);
+    stroke-width: 1;
+}
+
+.crosshair {
+    stroke: var(--text-secondary);
+    stroke-width: 1;
+    pointer-events: none;
+}
+
+.series-line {
+    fill: none;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.dot {
+    stroke: var(--surface-1);
+    stroke-width: 2;
+}
+
+#tooltip {
+    position: fixed;
+    z-index: 10;
+    min-width: 160px;
+    max-width: 320px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #242423;
+    color: var(--text-primary);
+    font-size: 12px;
+    pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+#tooltip[hidden] {
+    display: none;
+}
+
+#tooltip .tt-title {
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+}
+
+#tooltip .tt-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+#tooltip .tt-key {
+    width: 12px;
+    height: 2px;
+    border-radius: 1px;
+    flex: none;
+}
+
+#tooltip .tt-row strong {
+    font-variant-numeric: tabular-nums;
+}
+
+#tooltip .tt-row span.lbl {
+    color: var(--text-secondary);
+}
+
+/* Tables */
+.table-wrap {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+th,
+td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--grid);
+    text-align: right;
+    white-space: nowrap;
+}
+
+th {
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+th:first-child,
+td:first-child,
+td.text {
+    text-align: left;
+}
+
+td {
+    font-variant-numeric: tabular-nums;
+}
+
+td .score {
+    margin-left: 6px;
+    color: var(--text-muted);
+}
+
+tr.group td {
+    padding-top: 12px;
+    color: var(--text-secondary);
+    font-weight: 600;
+    text-align: left;
+}
+
+tbody tr.clickable {
+    cursor: pointer;
+}
+
+tbody tr.clickable:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+tbody tr.selected {
+    background: rgba(57, 135, 229, 0.12);
+}
+
+.checks {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px 24px;
+    font-size: 13px;
+}
+
+.checks h3 {
+    margin: 0 0 4px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.checks p {
+    margin: 0;
+}
+
+@media (max-width: 600px) {
+    .tile .value {
+        font-size: 22px;
+    }
+}
+</style>
+</head>
+
+<body>
+<main>
+    <header>
+        <div class="title-row">
+            <h1>Road metrics</h1>
+            <span id="statusPill" class="pill">Waiting for a run</span>
+        </div>
+        <p id="runInfo" class="sub"></p>
+    </header>
+
+    <div id="emptyState" class="empty">
+        No road simplification yet. In the app, close a city and press
+        <strong>Simplify Network</strong> on the Roads tab; this page fills in
+        live while it runs. The last finished run is kept, so this page also
+        works after a reload.
+    </div>
+
+    <div id="content" hidden>
+
+        <section class="tiles" id="tiles" aria-label="Headline scores"></section>
+
+        <section class="card">
+            <h2>Quality over one attempt</h2>
+            <p class="note">Group scores (0 = bad, 1 = good) as roads are removed. Structure is the
+            weighted mix of NC, RS and BB; Q also subtracts λ × cost.</p>
+
+            <div class="controls">
+                <span>Attempt</span>
+                <span id="attemptButtons" class="seg"></span>
+                <span>X axis</span>
+                <span class="seg" id="xModeButtons">
+                    <button data-x="removed" aria-pressed="true">Road length removed</button>
+                    <button data-x="step" aria-pressed="false">Removal number</button>
+                </span>
+                <label class="step-control">
+                    Inspect removal
+                    <input id="stepSlider" type="range" min="0" max="0" value="0">
+                    <span id="stepLabel"></span>
+                </label>
+            </div>
+
+            <div class="legend" id="groupLegend"></div>
+            <div class="chart" id="groupChart"></div>
+        </section>
+
+        <section class="card">
+            <h2>Every metric, same attempt</h2>
+            <p class="note">Each metric's score over the removals. The line under each title is the
+            raw value at the inspected removal; the marker shows where that is.</p>
+            <div class="multiples" id="multiples"></div>
+        </section>
+
+        <section class="card">
+            <h2>Each removal</h2>
+            <p class="note">How much each removed road changed Q (ΔQ). Random picks were drawn with
+            probability P = 1 / (1 + e<sup>−k·ΔQ</sup>); greedy picks finish the budget once random
+            draws stall, taking the least harmful road.</p>
+            <div class="legend" id="dqLegend"></div>
+            <div class="chart" id="dqChart"></div>
+        </section>
+
+        <section class="card">
+            <h2>Attempts compared</h2>
+            <p class="note">Every attempt starts from the same network. The winner meets the road
+            budget and has the highest structure score. Click a row to inspect that attempt.</p>
+            <div class="legend" id="attemptLegend"></div>
+            <div class="chart" id="attemptChart"></div>
+            <div class="table-wrap">
+                <table id="attemptTable"></table>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Metric table</h2>
+            <p class="note">Raw value, then its 0–1 score. Final = the winning attempt after
+            straightening and validation.</p>
+            <div class="table-wrap">
+                <table id="metricTable"></table>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Rules and checks</h2>
+            <div class="checks" id="checks"></div>
+        </section>
+    </div>
+</main>
+
+<div id="tooltip" role="status" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="js/metrics-page.js"></script>
+</body>
+</html>

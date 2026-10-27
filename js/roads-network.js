@@ -72,6 +72,20 @@ function connectivityIndices(nodeCount, edgeCount, components) {
 }
 
 
+// Nodes with at least one road among the first nodeCount.
+function activeNodeCount(nodeCount, edges) {
+
+    const used = new Uint8Array(nodeCount);
+
+    for (const [a, b] of edges) {
+        if (a < nodeCount) used[a] = 1;
+        if (b < nodeCount) used[b] = 1;
+    }
+
+    return used.reduce((s, v) => s + v, 0);
+}
+
+
 function countComponents(nodeCount, edges) {
 
     const adj = Array.from({ length: nodeCount }, () => []);
@@ -87,7 +101,9 @@ function countComponents(nodeCount, edges) {
 
     for (let i = 0; i < nodeCount; i++) {
 
-        if (seen[i]) {
+        // A node with no road left (a pruned dead end) is not
+        // part of the network.
+        if (seen[i] || !adj[i].length) {
             continue;
         }
 
@@ -295,19 +311,90 @@ function edgeKeyOf(a, b) {
 }
 
 
+// Distance from (x, y) to the closed ring `polygon`.
+function distanceToRing(x, y, polygon) {
+
+    let best = Infinity;
+
+    for (let i = 0; i < polygon.length; i++) {
+
+        const a = polygon[i];
+        const b = polygon[(i + 1) % polygon.length];
+
+        const dx = b[0] - a[0];
+        const dy = b[1] - a[1];
+
+        const t = Math.max(0, Math.min(1,
+            ((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy || 1)
+        ));
+
+        best = Math.min(best, Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy));
+    }
+
+    return best;
+}
+
+
+// Does the straight road p-q leave the (possibly concave) city?
+// Both ends are inside, so this only happens across a notch.
+// Roads along the boundary (between two boundary crossings) sit
+// exactly on it, so a sample counts as outside only when it is
+// more than half a pixel out.
+function roadLeavesCity(p, q, polygon) {
+
+    if (!polygon.length) {
+        return false;
+    }
+
+    const steps =
+        Math.max(2, Math.ceil(Math.hypot(q.x - p.x, q.y - p.y) / 2));
+
+    for (let s = 1; s < steps; s++) {
+
+        const t = s / steps;
+
+        const x = p.x + (q.x - p.x) * t;
+        const y = p.y + (q.y - p.y) * t;
+
+        if (
+            !d3.polygonContains(polygon, [x, y]) &&
+            distanceToRing(x, y, polygon) > 0.5
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
 function removeUnbuildableCrossings(nodes, edges) {
 
     const crossing = [];
 
+    // Roads that leave the city are never kept by chance - only
+    // when they are the sole link.
+    const city =
+        cityClosed && boundaryPoints.length >= 3
+            ? getBoundaryPolygonPoints(200).map(q => [q.x, q.y])
+            : [];
+
+    const outside = new Set();
+
     edges.forEach(([a, b], i) => {
-        if (roadCrossingKind(nodes[a], nodes[b])) {
+        if (roadLeavesCity(nodes[a], nodes[b], city)) {
+            outside.add(i);
+            crossing.push(i);
+        } else if (roadCrossingKind(nodes[a], nodes[b])) {
             crossing.push(i);
         }
     });
 
     const result = {
         edges,
-        found: crossing.length,
+        found: crossing.length - outside.size,
+        outside: outside.size,
+        outsideRemoved: 0,
         removed: 0,
         keptByChance: 0,
         keptNeeded: 0
@@ -368,7 +455,7 @@ function removeUnbuildableCrossings(nodes, edges) {
 
     for (const i of crossing) {
 
-        if (chance(i) < BRIDGE_KEEP_CHANCE) {
+        if (!outside.has(i) && chance(i) < BRIDGE_KEEP_CHANCE) {
             result.keptByChance++;
             continue;
         }
@@ -381,7 +468,12 @@ function removeUnbuildableCrossings(nodes, edges) {
         }
 
         alive[i] = false;
-        result.removed++;
+
+        if (outside.has(i)) {
+            result.outsideRemoved++;
+        } else {
+            result.removed++;
+        }
     }
 
     result.edges = edges.filter((_, i) => alive[i]);
@@ -614,6 +706,8 @@ function buildRoadNetwork() {
         offLand,
         crossings: {
             found: crossings.found,
+            outside: crossings.outside,
+            outsideRemoved: crossings.outsideRemoved,
             removed: crossings.removed,
             keptByChance: crossings.keptByChance,
             keptNeeded: crossings.keptNeeded
@@ -660,6 +754,22 @@ function drawUrquhart() {
 // Draw whatever edges the network currently holds. Kept apart
 // from buildRoadNetwork() so simplification can redraw its
 // result without regenerating the graph underneath it.
+// Road nodes that still have a road (pruning may strip dead ends).
+function roadNodesInUse(net) {
+
+    const used = new Uint8Array(net.nodes.length);
+
+    for (const [a, b] of net.allEdges) {
+        used[a] = 1;
+        used[b] = 1;
+    }
+
+    return net.nodes
+        .slice(0, net.roadNodeCount)
+        .filter((_, i) => used[i]);
+}
+
+
 function renderRoadNetwork(net) {
 
     urquhartLayer.selectAll("*").remove();
@@ -797,7 +907,7 @@ function renderRoadNetwork(net) {
 
     group
         .selectAll("circle.building-point")
-        .data(net.nodes.slice(0, net.roadNodeCount))
+        .data(roadNodesInUse(net))
         .join("circle")
         .attr("class", "building-point")
         .attr("cx", p => p.x)
@@ -824,10 +934,11 @@ function renderRoadNetwork(net) {
             .attr("r", jr);
     }
 
-    updateRoadStats();
-
-    // Buildings are filtered against the roads just drawn.
+    // Buildings are filtered against the roads just drawn; the
+    // stats come after so they show this drawing's count.
     drawBuildings();
+
+    updateRoadStats();
 }
 
 
@@ -879,6 +990,10 @@ function updateRoadStats() {
               `${countKeyed(net, net.offLand)} over other ground ` +
               `(${net.crossings.keptNeeded} kept to stay connected)`
             : "") +
+        (net.crossings && net.crossings.outside
+            ? `\nLeaving the city: ${net.crossings.outside} roads, ` +
+              `${net.crossings.outsideRemoved} removed`
+            : "") +
         (net.chains
             ? `\nMain roads: ${net.chains.filter(c => c.main).length} ` +
               `chains, ${metresLabel(d3.sum(net.chains.filter(c => c.main), c => c.length))}` +
@@ -886,6 +1001,12 @@ function updateRoadStats() {
             : "") +
         (buildingsReady
             ? `\nBuildings: ${shownBuildingCount}`
+            : "") +
+        (net.quality
+            ? `\n${qualityLabel(net.quality)}` +
+              (net.qualityStart
+                  ? `\n  at start ${qualityLabel(net.qualityStart)}`
+                  : "")
             : "") +
         (net.simplified
             ? (net.junctions

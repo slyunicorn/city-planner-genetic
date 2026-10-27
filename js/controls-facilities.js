@@ -16,6 +16,24 @@ relaxIterationsSlider.addEventListener(
     }
 );
 
+flatPullSlider.addEventListener(
+    "input",
+    () => {
+
+        flatPullValue.textContent =
+            Number(flatPullSlider.value).toFixed(1);
+    }
+);
+
+lowPullSlider.addEventListener(
+    "input",
+    () => {
+
+        lowPullValue.textContent =
+            Number(lowPullSlider.value).toFixed(1);
+    }
+);
+
 relaxBtn.addEventListener(
     "click",
     () => {

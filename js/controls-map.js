@@ -109,6 +109,33 @@ rSlider.addEventListener(
 
 
 // ============================================================
+// EDGE DENSITY FALLOFF
+// ============================================================
+//
+// Before the city is closed this only sets the value used at
+// close time; afterwards the points are regenerated with it.
+
+densityFalloffSlider.addEventListener(
+    "input",
+    () => {
+
+        densityFalloffValue.textContent =
+            densityFalloffSlider.value;
+    }
+);
+
+densityFalloffSlider.addEventListener(
+    "change",
+    () => {
+
+        if (cityClosed) {
+            generatePoints();
+        }
+    }
+);
+
+
+// ============================================================
 // K SLIDER
 // ============================================================
 

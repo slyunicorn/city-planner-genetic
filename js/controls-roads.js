@@ -87,7 +87,28 @@ simplifyKSlider.addEventListener(
     () => {
 
         simplifyKValue.textContent =
-            simplifyKSlider.value;
+            Number(simplifyKSlider.value).toFixed(1);
+    }
+);
+
+
+for (const [slider, label] of [
+    [weightNcSlider, weightNcValue],
+    [weightRsSlider, weightRsValue],
+    [weightBbSlider, weightBbValue]
+]) {
+    slider.addEventListener("input", () => {
+        label.textContent = slider.value;
+    });
+}
+
+
+costWeightSlider.addEventListener(
+    "input",
+    () => {
+
+        costWeightValue.textContent =
+            Number(costWeightSlider.value).toFixed(1);
     }
 );
 
@@ -95,6 +116,12 @@ simplifyKSlider.addEventListener(
 simplifyBtn.addEventListener(
     "click",
     runRoadSimplification
+);
+
+
+metricsPageBtn.addEventListener(
+    "click",
+    openMetricsPage
 );
 
 

@@ -237,7 +237,7 @@ function selectAndRemoveRoad(graph, cell, k, rng) {
         }
 
         if (random() < p) {
-            setEdgeAlive(graph, candidate.edge, false);
+            removeRoad(graph, candidate.edge);
             return candidate.edge;
         }
     }
