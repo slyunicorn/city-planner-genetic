@@ -56,7 +56,15 @@ function makeDraggable(panel, handle) {
         "pointerdown",
         event => {
 
+            // Buttons in a header bar stay clickable.
+            if (event.target.closest("button, input, select")) {
+                return;
+            }
+
             dragging = true;
+
+            // Lets CSS stop an iframe inside from eating the drag.
+            panel.classList.add("dragging");
 
 
             const rect =
@@ -106,6 +114,8 @@ function makeDraggable(panel, handle) {
         () => {
 
             dragging = false;
+
+            panel.classList.remove("dragging");
         }
     );
 }
@@ -123,6 +133,48 @@ makeDraggable(controls, controlsHeader);
 makeDraggable(
     document.getElementById("landCoverLegend"),
     document.getElementById("landCoverLegend-header")
+);
+
+
+// ============================================================
+// METRICS WINDOW
+// ============================================================
+//
+// The metrics page (metrics.html) in a window over the map. A
+// Simplify run is animated with requestAnimationFrame, which
+// browsers pause while a tab is in the background, so watching
+// it from another tab stalls the run. In this window both stay in
+// one visible tab. The page talks to the planner over the same
+// BroadcastChannel either way.
+
+function showMetricsWindow(show = metricsWindow.hidden) {
+
+    if (show && !metricsFrame.getAttribute("src")) {
+        metricsFrame.src = "metrics.html";
+    }
+
+    metricsWindow.hidden = !show;
+
+    metricsPageBtn.textContent =
+        show ? "Hide metrics window" : "Show metrics window";
+}
+
+makeDraggable(
+    metricsWindow,
+    document.getElementById("metricsWindow-header")
+);
+
+document.getElementById("metricsCloseBtn").addEventListener(
+    "click",
+    () => showMetricsWindow(false)
+);
+
+document.getElementById("metricsTabBtn").addEventListener(
+    "click",
+    () => {
+        showMetricsWindow(false);
+        openMetricsPage();
+    }
 );
 
 

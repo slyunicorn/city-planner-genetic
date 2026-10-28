@@ -184,11 +184,12 @@ def way_index_path(pbf):
     return base + ".wayidx.npz"
 
 
-def way_index(pbf, member_ways, log=print, should_stop=lambda: False):
+def way_index(pbf, member_ways, log=print, should_stop=lambda: False, keep=None):
     """
     (ids, boxes) for every land cover way in pbf (tagged with KEYS, or a
     member of a land cover multipolygon): its id and lon/lat bounding box
-    (west, south, east, north). Rebuilt when pbf changes.
+    (west, south, east, north). Rebuilt when pbf changes. `keep(way)`
+    replaces the land cover test (tools/osm_roads.py indexes roads).
     """
 
     path = way_index_path(pbf)
@@ -224,7 +225,10 @@ def way_index(pbf, member_ways, log=print, should_stop=lambda: False):
         if should_stop():
             raise Cancelled()
 
-        if not relevant(way.tags) and way.id not in member_ways:
+        if keep:
+            if not keep(way):
+                continue
+        elif not relevant(way.tags) and way.id not in member_ways:
             continue
 
         try:

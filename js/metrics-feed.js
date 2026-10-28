@@ -19,10 +19,15 @@
 //   attempt   a new attempt began: { attempt, points }
 //   points    new points for an attempt: { attempt, from, points }
 //   attempt-end { attempt, summary }
+//
+// The page can also ask for a comparison with the area's real roads
+// ("compare-request"); real-roads.js answers with compare-status
+// messages and a compare-result (or compare-error).
 // ============================================================
 
 const METRICS_CHANNEL_NAME = "ai-city-road-metrics";
 const METRICS_STORAGE_KEY = "aiCity.roadMetrics.lastRun";
+const METRICS_COMPARE_KEY = "aiCity.roadMetrics.lastCompare";
 
 const metricsFeed = (() => {
 
@@ -64,10 +69,15 @@ const metricsFeed = (() => {
                 run.attempts.forEach(a => { a.sent = a.points.length; });
                 post({ type: "run", run: forPage() });
             }
+            if (event.data && event.data.type === "compare-request") {
+                compareWithRealRoads();
+            }
         };
     }
 
     return {
+
+        send: post,
 
         startRun(info) {
             run = { ...info, status: "running", attempts: [] };

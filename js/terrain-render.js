@@ -8,7 +8,9 @@
 // ------------------------------------------------------------
 //
 // Elevation is sampled from elevationData directly, so this ramp
-// is only used to paint the visible map.
+// is only used to paint the visible map. Its ends are pinned to
+// elevationDisplayLo / Hi (terrain-data.js), a percentile range,
+// not to the lowest and highest pixel.
 
 const VIRIDIS_STOPS = [
     [ 68,   1,  84], [ 72,  40, 120], [ 62,  74, 137],
@@ -81,12 +83,7 @@ function renderTerrain() {
             img.data[p + 1] = v;
             img.data[p + 2] = v;
 
-        } else if (
-            elevationData &&
-            elevationMinM +
-                elevationData[i] *
-                (elevationMaxM - elevationMinM) < seaLevelM
-        ) {
+        } else if (elevationMetres[i] < seaLevelM) {
 
             // Below sea level: shade as water so it is obvious
             // which ground the city cannot use. Viridis is blue
@@ -99,7 +96,10 @@ function renderTerrain() {
         } else {
 
             const c =
-                viridisColor(elevationData[i]);
+                viridisColor(
+                    (elevationMetres[i] - elevationDisplayLo) /
+                    (elevationDisplayHi - elevationDisplayLo)
+                );
 
             img.data[p] = c[0];
             img.data[p + 1] = c[1];
@@ -117,10 +117,10 @@ function renderTerrain() {
 // ELEVATION SAMPLING
 // ============================================================
 //
-// The lowest and highest elevations found in the fetched tiles
-// (elevationMinM / elevationMaxM) are what the colour ramp's
-// blue and yellow ends are pinned to, so the visible gradient
-// always spans the full relief of whatever area was loaded.
+// elevationData is normalised between the lowest and highest
+// elevations found in the fetched tiles (elevationMinM /
+// elevationMaxM); getElevationAt() turns it back into metres. The
+// map's colours use a percentile range instead (renderTerrain()).
 //
 // Height at an arbitrary point is read from the decoded metre
 // values directly, NOT by inspecting the rendered pixel colour.

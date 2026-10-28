@@ -167,6 +167,9 @@ function createQualityContext(nodes, edgeList, options) {
         n,
         m,
         isFacility,
+        // Ends where a network was cut off by the city boundary
+        // (real roads, real-roads.js): not dead ends, not junctions.
+        isBoundary: opts.boundary || null,
         length,
         roadEdge,
         costWeight: opts.costWeight ?? QUALITY_COST_WEIGHT,
@@ -1069,12 +1072,14 @@ const NODE_FIELDS = ["alive", "inter", "dead", "nc", "degNC", "angle", "side", "
 
 // What one node adds to the NC sums. Facility nodes count only
 // towards "alive" (graph size); they are destinations, not
-// junctions, and their spurs are dead ends on purpose.
+// junctions, and their spurs are dead ends on purpose. Boundary
+// nodes (a road cut off at the city edge) likewise.
 function nodeRecord(st, x) {
 
     const g = st.graph;
     const d = g.degree[x];
-    const road = !st.ctx.isFacility[x];
+    const road =
+        !st.ctx.isFacility[x] && !(st.ctx.isBoundary && st.ctx.isBoundary[x]);
 
     const nc = road && d >= 1 && d !== 2;
 
@@ -1739,14 +1744,20 @@ function calibrateRemovalK(st, sharpness) {
 
 // Score a finished network (e.g. before and after straightening)
 // against the references of the run that produced it.
-function scoreNetwork(nodes, edgeList, refCtx, baseTotalLength) {
+// options.ownSources: pick this network's own OD sources (another
+// network's node indices mean nothing here); options.boundary:
+// see createQualityContext().
+function scoreNetwork(nodes, edgeList, refCtx, baseTotalLength, options) {
+
+    const opts = options || {};
 
     const ctx =
         createQualityContext(nodes, edgeList, {
             weights: refCtx.weights,
             costWeight: refCtx.costWeight,
             references: qualityReferences(refCtx),
-            sources: refCtx.sources
+            sources: opts.ownSources ? undefined : refCtx.sources,
+            boundary: opts.boundary
         });
 
     // Keep the run's weights as they were (BB is not dropped

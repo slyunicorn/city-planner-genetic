@@ -433,6 +433,178 @@ tbody tr.selected {
     margin: 0;
 }
 
+/* View tabs */
+.tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 14px 0 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.tabs button {
+    padding: 8px 12px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    cursor: pointer;
+}
+
+.tabs button:hover {
+    color: var(--text-primary);
+}
+
+.tabs button[aria-selected="true"] {
+    border-bottom-color: var(--text-primary);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+/* Real roads vs plan */
+.action-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+}
+
+.action {
+    padding: 7px 14px;
+    border: 1px solid var(--text-secondary);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.action:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.action:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.status-line {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.pair {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+}
+
+.pair .who {
+    min-width: 34px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.pair .who::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 5px;
+    border-radius: 50%;
+    background: var(--key);
+}
+
+.pair .num {
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.maps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+}
+
+.maps.single {
+    grid-template-columns: minmax(0, 860px);
+    justify-content: center;
+}
+
+.toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.toggle .key {
+    display: inline-block;
+    width: 16px;
+    height: 3px;
+    border-radius: 1px;
+}
+
+.map-panel h3 {
+    margin: 0 0 6px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.map-panel svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--grid);
+    border-radius: 6px;
+    background: var(--page);
+}
+
+.map-panel .city {
+    fill: rgba(255, 255, 255, 0.03);
+    stroke: var(--axis);
+    stroke-width: 1;
+    stroke-dasharray: 4 3;
+    vector-effect: non-scaling-stroke;
+}
+
+.map-panel .net {
+    fill: none;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.map-panel .caption {
+    margin: 6px 0 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.notes {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.notes li + li {
+    margin-top: 4px;
+}
+
+td .diff.up {
+    color: var(--good);
+}
+
+td .diff.down {
+    color: var(--critical);
+}
+
 @media (max-width: 600px) {
     .tile .value {
         font-size: 22px;
@@ -449,7 +621,14 @@ tbody tr.selected {
             <span id="statusPill" class="pill">Waiting for a run</span>
         </div>
         <p id="runInfo" class="sub"></p>
+
+        <nav class="tabs" role="tablist" aria-label="Views">
+            <button id="tabRun" role="tab" data-view="run" aria-selected="true">Simplification run</button>
+            <button id="tabCompare" role="tab" data-view="compare" aria-selected="false">Real roads vs plan</button>
+        </nav>
     </header>
+
+    <div id="runView">
 
     <div id="emptyState" class="empty">
         No road simplification yet. In the app, close a city and press
@@ -526,6 +705,66 @@ tbody tr.selected {
             <h2>Rules and checks</h2>
             <div class="checks" id="checks"></div>
         </section>
+    </div>
+
+    </div>
+
+    <div id="compareView" hidden>
+
+        <section class="card">
+            <h2>The area's real roads, scored like the plan</h2>
+            <p class="note">The planner tab fetches the real road network inside the city boundary
+            (OpenStreetMap, from the local server) and runs the same NC / RS / BB metrics and Q on it
+            and on the plan's roads, with the same weights and references. Keep the planner open with
+            a finished Simplify run.</p>
+            <div class="action-row">
+                <button id="compareBtn" class="action">Load real roads and compare</button>
+                <span id="compareStatus" class="status-line"></span>
+            </div>
+        </section>
+
+        <div id="compareEmpty" class="empty">
+            No comparison yet. Press <strong>Load real roads and compare</strong> above. The last
+            comparison is kept, so this view also works after a reload.
+        </div>
+
+        <div id="compareContent" hidden>
+
+            <p id="compareInfo" class="sub"></p>
+
+            <section class="tiles" id="compareTiles" aria-label="Real roads vs plan"></section>
+
+            <section class="card">
+                <h2>Scores side by side</h2>
+                <p class="note">Every score is 0 (bad) to 1 (good) under the plan's rules. Hover a row
+                for the raw values.</p>
+                <div class="legend" id="compareLegend"></div>
+                <div class="chart" id="compareChart"></div>
+            </section>
+
+            <section class="card">
+                <h2>The two networks</h2>
+                <p class="note">Same area and scale. Thicker lines: main roads in the plan; motorway,
+                trunk, primary and secondary roads in the real network. Overlay shows both on one map;
+                switch each on or off.</p>
+                <div class="controls" id="compareMapControls"></div>
+                <div class="maps" id="compareMaps"></div>
+            </section>
+
+            <section class="card">
+                <h2>Metric table</h2>
+                <p class="note">Raw value, then its 0–1 score. The last column is the plan's score minus
+                the real roads' score.</p>
+                <div class="table-wrap">
+                    <table id="compareTable"></table>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>How this was measured</h2>
+                <ul class="notes" id="compareNotes"></ul>
+            </section>
+        </div>
     </div>
 </main>
 

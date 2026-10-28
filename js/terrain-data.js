@@ -29,6 +29,14 @@ const R_EARTH = 6378137;
 const MERC_ORIGIN = Math.PI * R_EARTH;   // 20037508.342789244
 const MAX_ZOOM = 15;
 
+// Bad pixels (see repairElevationSpikes()): off the planet's range,
+// or this far from a neighbouring pixel. Repaired from the good
+// pixels within DESPIKE_RADIUS, over up to DESPIKE_PASSES passes.
+const ELEVATION_RANGE_M = [-11000, 9000];
+const DESPIKE_STEP_M = 1000;
+const DESPIKE_RADIUS = 3;
+const DESPIKE_PASSES = 4;
+
 
 // Normalised elevation, 0 = lowest point in view, 1 = highest.
 // Same orientation as the old viridis t: 0 is blue, 1 is yellow.
@@ -56,6 +64,15 @@ let metresPerPixel = 0;
 
 let elevationMinM = 0;
 let elevationMaxM = 0;
+
+// The map's colour range (display only): the 0.5th to 99.5th
+// percentile of the heights, so a handful of extreme pixels (a
+// quarry, a dredged channel, a lone peak) cannot squeeze the rest
+// of the map into one colour. Kochi at 17.7 km: -274..302 m in all,
+// but 99% of it lies between about 0 and 35 m.
+let elevationDisplayLo = 0;
+let elevationDisplayHi = 1;
+const DISPLAY_PERCENTILE = 0.005;
 
 // The exact Mercator square loadTerrain() cropped the elevation
 // grid from. Land cover has to be sampled against this same
@@ -321,21 +338,32 @@ async function loadTerrain(lat, lon, distM, targetPx) {
     const metres =
         new Float32Array(targetPx * targetPx);
 
-    let lo = Infinity;
-    let hi = -Infinity;
-
     for (let i = 0; i < metres.length; i++) {
 
         const p = i * 4;
 
-        const e =
+        metres[i] =
             pixels[p] * 256 +
             pixels[p + 1] +
             pixels[p + 2] / 256 -
             32768;
+    }
 
-        metres[i] = e;
+    const repaired =
+        repairElevationSpikes(metres, targetPx, targetPx);
 
+    if (repaired) {
+        logStep(
+            `Terrain: ${repaired} bad pixels in the elevation tiles ` +
+            `(impossible values, or over ${DESPIKE_STEP_M} m off ` +
+            `their neighbours) repaired from the pixels around them.`
+        );
+    }
+
+    let lo = Infinity;
+    let hi = -Infinity;
+
+    for (const e of metres) {
         if (e < lo) { lo = e; }
         if (e > hi) { hi = e; }
     }
@@ -362,6 +390,17 @@ async function loadTerrain(lat, lon, distM, targetPx) {
     elevationMinM = lo;
     elevationMaxM = hi;
 
+    const sorted = Float32Array.from(metres).sort();
+    const last = sorted.length - 1;
+
+    elevationDisplayLo = sorted[Math.floor(DISPLAY_PERCENTILE * last)];
+    elevationDisplayHi = sorted[Math.ceil((1 - DISPLAY_PERCENTILE) * last)];
+
+    if (!(elevationDisplayHi > elevationDisplayLo)) {
+        elevationDisplayLo = lo;
+        elevationDisplayHi = hi > lo ? hi : lo + 1;
+    }
+
     metresPerPixel = (2 * distM) / targetPx;
 
     computeSobel();
@@ -373,4 +412,115 @@ async function loadTerrain(lat, lon, distM, targetPx) {
     );
 
     return { width: targetPx, height: targetPx };
+}
+
+
+// ============================================================
+// BAD PIXELS
+// ============================================================
+//
+// Some Terrarium tiles carry garbage: Kochi at a 17.7 km radius
+// has two rows of constant values, -3433 m and -12989 m, in a sea
+// at 0 m. One such row stretches the colour scale (lowest to
+// highest point) so far that everything else renders yellow, and
+// it fakes a cliff for the Sobel slope.
+//
+// A pixel is bad when it is outside ELEVATION_RANGE_M (lower than
+// the deepest ocean, higher than Everest) or differs from one of
+// its four neighbours by more than DESPIKE_STEP_M - no real slope
+// does that between neighbouring pixels. Its good neighbours are
+// flagged too, which is harmless. Every flagged pixel takes the
+// median of the unflagged pixels within DESPIKE_RADIUS. Repeated
+// (DESPIKE_PASSES), so a strip a few rows thick heals from its
+// edges. Returns how many pixels changed by more than the step
+// (the actually bad ones).
+// ============================================================
+
+function repairElevationSpikes(metres, w, h) {
+
+    const [lowest, highest] = ELEVATION_RANGE_M;
+
+    let repaired = 0;
+
+    for (let pass = 0; pass < DESPIKE_PASSES; pass++) {
+
+        const flagged = new Uint8Array(metres.length);
+        const list = [];
+
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+
+                const i = y * w + x;
+                const e = metres[i];
+
+                const off =
+                    e < lowest || e > highest ||
+                    (x > 0 && Math.abs(e - metres[i - 1]) > DESPIKE_STEP_M) ||
+                    (x + 1 < w && Math.abs(e - metres[i + 1]) > DESPIKE_STEP_M) ||
+                    (y > 0 && Math.abs(e - metres[i - w]) > DESPIKE_STEP_M) ||
+                    (y + 1 < h && Math.abs(e - metres[i + w]) > DESPIKE_STEP_M);
+
+                if (off) {
+                    flagged[i] = 1;
+                    list.push(i);
+                }
+            }
+        }
+
+        if (!list.length) {
+            break;
+        }
+
+        const fixed = [];
+
+        for (const i of list) {
+
+            const x = i % w;
+            const y = (i - x) / w;
+            const around = [];
+
+            for (let dy = -DESPIKE_RADIUS; dy <= DESPIKE_RADIUS; dy++) {
+                for (let dx = -DESPIKE_RADIUS; dx <= DESPIKE_RADIUS; dx++) {
+
+                    const xx = x + dx;
+                    const yy = y + dy;
+
+                    if (xx < 0 || yy < 0 || xx >= w || yy >= h) {
+                        continue;
+                    }
+
+                    const j = yy * w + xx;
+
+                    if (!flagged[j]) {
+                        around.push(metres[j]);
+                    }
+                }
+            }
+
+            if (around.length) {
+                around.sort((a, b) => a - b);
+                fixed.push([i, around[around.length >> 1]]);
+            }
+        }
+
+        let changed = 0;
+
+        for (const [i, v] of fixed) {
+
+            if (Math.abs(metres[i] - v) > DESPIKE_STEP_M) {
+                repaired++;
+            }
+
+            if (metres[i] !== v) {
+                metres[i] = v;
+                changed++;
+            }
+        }
+
+        if (!changed) {
+            break;
+        }
+    }
+
+    return repaired;
 }

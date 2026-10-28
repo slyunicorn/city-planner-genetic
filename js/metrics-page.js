@@ -5,6 +5,13 @@
 
 const CHANNEL_NAME = "ai-city-road-metrics";
 const STORAGE_KEY = "aiCity.roadMetrics.lastRun";
+const COMPARE_KEY = "aiCity.roadMetrics.lastCompare";
+
+// Real roads vs plan: categorical slots 1 and 2 (validated pair).
+const COMPARE_SERIES = [
+    { key: "real", label: "Real roads", color: "var(--series-1)" },
+    { key: "plan", label: "Plan", color: "var(--series-2)" }
+];
 
 // Group series, in categorical slot order (validated as a set).
 const GROUP_SERIES = [
@@ -21,7 +28,13 @@ const state = {
     selected: null,     // attempt number the user picked
     follow: true,       // follow the live attempt / the winner
     step: null,         // inspected removal index; null = latest
-    xMode: "removed"
+    xMode: "removed",
+    view: location.hash === "#compare" ? "compare" : "run",
+    compare: null,      // last real-roads comparison
+    mapMode: "overlay", // or "split" (side by side)
+    mapShow: { real: true, plan: true },
+    compareStatus: "",
+    compareBusy: false
 };
 
 
@@ -36,6 +49,15 @@ try {
     }
 } catch (err) {
     // No saved run (or storage blocked): wait for the live feed.
+}
+
+try {
+    const saved = localStorage.getItem(COMPARE_KEY);
+    if (saved) {
+        state.compare = JSON.parse(saved);
+    }
+} catch (err) {
+    // No saved comparison.
 }
 
 let channel = null;
@@ -64,6 +86,12 @@ function findAttempt(n) {
 function handleMessage(msg) {
 
     if (!msg || !msg.type) {
+        return;
+    }
+
+    if (msg.type.startsWith("compare-")) {
+        handleCompareMessage(msg);
+        scheduleRender();
         return;
     }
 
@@ -160,13 +188,13 @@ function scoreValue(point, key) {
     return i >= 0 ? point.scores[i] : null;
 }
 
-function formatRaw(unit, v) {
+function formatRaw(unit, v, metresPerPixel) {
 
     if (v == null) {
         return "–";
     }
 
-    const mpp = state.run.metresPerPixel || 1;
+    const mpp = metresPerPixel || (state.run && state.run.metresPerPixel) || 1;
 
     switch (unit) {
         case "perKm":
@@ -551,10 +579,22 @@ function render() {
 
     const run = state.run;
 
+    for (const tab of document.querySelectorAll(".tabs button")) {
+        tab.setAttribute("aria-selected", String(tab.dataset.view === state.view));
+    }
+
+    document.getElementById("runView").hidden = state.view !== "run";
+    document.getElementById("compareView").hidden = state.view !== "compare";
+
     document.getElementById("emptyState").hidden = !!run;
     document.getElementById("content").hidden = !run;
 
     renderHeader();
+
+    if (state.view === "compare") {
+        renderCompare();
+        return;
+    }
 
     if (!run) {
         return;
@@ -1211,6 +1251,659 @@ function renderChecks() {
                 ? `Structure ${fmt3(run.beforeStraightening.structural)} → ${fmt3(run.afterStraightening.structural)}`
                 : ""
         ].filter(Boolean));
+    }
+}
+
+
+
+// ------------------------------------------------------------
+// Real roads vs plan
+// ------------------------------------------------------------
+//
+// The button asks the planner tab (metrics-feed.js, real-roads.js)
+// for a comparison. It answers with compare-status messages and a
+// compare-result, which is kept in localStorage like the run.
+
+let compareWatchdog = null;
+
+const ASKING = "Asking the planner tab...";
+
+for (const tab of document.querySelectorAll(".tabs button")) {
+
+    tab.addEventListener("click", () => {
+
+        state.view = tab.dataset.view;
+
+        history.replaceState(
+            null, "",
+            state.view === "compare" ? "#compare" : location.pathname + location.search
+        );
+
+        render();
+    });
+}
+
+document.getElementById("compareBtn").addEventListener("click", () => {
+
+    if (!channel) {
+        state.compareStatus = "This browser has no BroadcastChannel, so the page cannot reach the planner.";
+        render();
+        return;
+    }
+
+    state.compareBusy = true;
+    state.compareStatus = ASKING;
+
+    channel.postMessage({ type: "compare-request" });
+
+    // Nothing answers when no planner tab is open.
+    clearTimeout(compareWatchdog);
+
+    compareWatchdog = setTimeout(() => {
+        if (state.compareBusy && state.compareStatus === ASKING) {
+            state.compareBusy = false;
+            state.compareStatus =
+                "No planner tab answered. Open the planner (index page, same address) " +
+                "with a finished Simplify run, then try again.";
+            render();
+        }
+    }, 4000);
+
+    render();
+});
+
+function handleCompareMessage(msg) {
+
+    if (msg.type === "compare-status") {
+
+        state.compareBusy = true;
+        state.compareStatus = msg.message;
+
+    } else if (msg.type === "compare-error") {
+
+        state.compareBusy = false;
+        state.compareStatus = msg.message;
+
+    } else if (msg.type === "compare-result") {
+
+        state.compareBusy = false;
+        state.compareStatus = `Compared at ${new Date(msg.result.createdAt).toLocaleTimeString()}.`;
+        state.compare = msg.result;
+    }
+}
+
+function compareRaw(side, key) {
+    const c = state.compare;
+    const i = c.rawKeys.indexOf(key);
+    return i >= 0 ? c[side].point.raw[i] : null;
+}
+
+function compareScore(side, key) {
+    const c = state.compare;
+    const i = c.scoreKeys.indexOf(key);
+    return i >= 0 ? c[side].point.scores[i] : null;
+}
+
+function renderCompare() {
+
+    const c = state.compare;
+
+    document.getElementById("compareBtn").disabled = state.compareBusy;
+    document.getElementById("compareStatus").textContent = state.compareStatus;
+
+    document.getElementById("compareEmpty").hidden = !!c;
+    document.getElementById("compareContent").hidden = !c;
+
+    if (!c) {
+        return;
+    }
+
+    const pct = v => `${Math.round(v * 100)}%`;
+
+    document.getElementById("compareInfo").textContent =
+        `${c.area.lat.toFixed(4)}, ${c.area.lon.toFixed(4)} · compared ` +
+        `${new Date(c.createdAt).toLocaleString()} · OpenStreetMap data of ${c.source.date} · ` +
+        `weights NC ${pct(c.weights.nc)} RS ${pct(c.weights.rs)} BB ${pct(c.weights.bb)} · ` +
+        `λ ${c.costWeight}`;
+
+    renderCompareTiles(c);
+    legend(document.getElementById("compareLegend"), COMPARE_SERIES);
+    renderCompareChart(c);
+    renderCompareMaps(c);
+    renderCompareTable(c);
+    renderCompareNotes(c);
+}
+
+function kmLabel(c, px) {
+    return `${d3.format(".1f")(px * c.area.metresPerPixel / 1000)} km`;
+}
+
+function renderCompareTiles(c) {
+
+    const el = document.getElementById("compareTiles");
+
+    el.textContent = "";
+
+    const tiles = [
+        { label: "Q (structure − λ·cost)", get: s => c[s].point.Q },
+        { label: "Structure", get: s => c[s].point.structural },
+        { label: "NC junctions", get: s => c[s].point.nc },
+        { label: "RS routes", get: s => c[s].point.rs },
+        { label: "BB blocks", get: s => c[s].point.bb }
+    ];
+
+    for (const t of tiles) {
+        const real = t.get("real");
+        const plan = t.get("plan");
+        el.appendChild(compareTile(t.label, [fmt3(real), fmt3(plan)], plan - real, "plan − real"));
+    }
+
+    const realLen = c.real.stats.length;
+    const planLen = c.plan.stats.length;
+
+    el.appendChild(compareTile(
+        "Road length",
+        [kmLabel(c, realLen), kmLabel(c, planLen)],
+        null,
+        `plan ${d3.format("+.0%")(planLen / realLen - 1)} vs real`
+    ));
+}
+
+function compareTile(label, values, delta, caption) {
+
+    const div = document.createElement("div");
+    div.className = "tile";
+
+    const l = document.createElement("div");
+    l.className = "label";
+    l.textContent = label;
+    div.appendChild(l);
+
+    COMPARE_SERIES.forEach((series, i) => {
+
+        const row = document.createElement("div");
+        row.className = "pair";
+
+        const who = document.createElement("span");
+        who.className = "who";
+        who.style.setProperty("--key", series.color);
+        who.textContent = series.label;
+
+        const num = document.createElement("span");
+        num.className = "num";
+        num.textContent = values[i];
+
+        row.append(who, num);
+        div.appendChild(row);
+    });
+
+    const d = document.createElement("div");
+    d.className = "delta";
+
+    if (delta != null && Math.abs(delta) >= 0.0005) {
+        d.classList.add(delta > 0 ? "up" : "down");
+        d.textContent = `${delta > 0 ? "▲" : "▼"} ${fmtSigned(delta)} ${caption}`;
+    } else {
+        d.textContent = delta != null ? `same ${caption}` : caption;
+    }
+
+    div.appendChild(d);
+
+    return div;
+}
+
+
+// Horizontal grouped bars: one row per score, Real and Plan side by
+// side, 0..1. Group rows carry value labels; every row has a
+// tooltip with the raw values.
+function renderCompareChart(c) {
+
+    const el = document.getElementById("compareChart");
+
+    el.textContent = "";
+
+    const mpp = c.area.metresPerPixel;
+
+    const rows = [
+        { label: "Structure", get: s => c[s].point.structural, labelled: true },
+        { label: "NC · junctions", get: s => c[s].point.nc, labelled: true },
+        { label: "RS · routes", get: s => c[s].point.rs, labelled: true },
+        { label: "BB · blocks", get: s => c[s].point.bb, labelled: true, last: true }
+    ].concat(c.metrics.map(def => ({
+        label: def.label,
+        get: s => compareScore(s, def.key),
+        raw: s => formatRaw(def.unit, compareRaw(s, def.raw), mpp)
+    })));
+
+    const width = Math.max(300, el.clientWidth);
+    const narrow = width < 520;
+    const rowH = 30;
+    const gap = 18;
+    const m = { top: 22, right: 44, bottom: 6, left: narrow ? 130 : 190 };
+    const height = m.top + rows.length * rowH + gap + m.bottom;
+
+    const x = d3.scaleLinear().domain([0, 1]).range([m.left, width - m.right]);
+    const rowY = i => m.top + i * rowH + (i >= 4 ? gap : 0);
+
+    const svg = d3.select(el)
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height)
+        .attr("role", "img")
+        .attr("aria-label", "Scores of the real roads and the plan, side by side");
+
+    svg.append("g")
+        .attr("class", "grid")
+        .selectAll("line")
+        .data(x.ticks(4))
+        .join("line")
+        .attr("x1", d => x(d))
+        .attr("x2", d => x(d))
+        .attr("y1", m.top - 4)
+        .attr("y2", height - m.bottom);
+
+    svg.append("g")
+        .attr("class", "axis")
+        .selectAll("text")
+        .data(x.ticks(4))
+        .join("text")
+        .attr("x", d => x(d))
+        .attr("y", m.top - 8)
+        .attr("text-anchor", "middle")
+        .text(d => fmt2(d));
+
+    const bar = 9;
+
+    rows.forEach((row, i) => {
+
+        const y0 = rowY(i);
+        const g = svg.append("g");
+
+        g.append("text")
+            .attr("class", "axis-label")
+            .attr("x", m.left - 8)
+            .attr("y", y0 + rowH / 2)
+            .attr("dy", "0.35em")
+            .attr("text-anchor", "end")
+            .style("fill", "var(--text-secondary)")
+            .text(narrow && row.label.length > 20 ? `${row.label.slice(0, 19)}…` : row.label);
+
+        COMPARE_SERIES.forEach((series, k) => {
+
+            const v = row.get(series.key);
+            const yb = y0 + 5 + k * (bar + 2);
+
+            g.append("rect")
+                .attr("x", x(0))
+                .attr("y", yb)
+                .attr("width", Math.max(0, x(Math.max(0, Math.min(1, v || 0))) - x(0)))
+                .attr("height", bar)
+                .attr("rx", 2)
+                .style("fill", series.color);
+
+            if (row.labelled) {
+                g.append("text")
+                    .attr("class", "end-label")
+                    .attr("x", x(Math.max(0, Math.min(1, v || 0))) + 4)
+                    .attr("y", yb + bar / 2)
+                    .attr("dy", "0.35em")
+                    .text(fmt2(v));
+            }
+        });
+
+        // Hit target: the whole row.
+        g.append("rect")
+            .attr("x", 0)
+            .attr("y", y0)
+            .attr("width", width)
+            .attr("height", rowH)
+            .style("fill", "transparent")
+            .on("mousemove", event => {
+                const real = row.get("real");
+                const plan = row.get("plan");
+                showTooltip(event, row.label, [
+                    ...COMPARE_SERIES.map(s => ({
+                        color: s.color,
+                        value: fmt3(row.get(s.key)),
+                        label: s.label + (row.raw ? ` · ${row.raw(s.key)}` : "")
+                    })),
+                    { value: fmtSigned(plan - real), label: "plan − real" }
+                ]);
+            })
+            .on("mouseleave", hideTooltip);
+    });
+
+    svg.append("line")
+        .attr("class", "baseline")
+        .attr("x1", x(0))
+        .attr("x2", x(0))
+        .attr("y1", m.top - 4)
+        .attr("y2", height - m.bottom);
+}
+
+
+// The two networks on the same area and scale: one overlay map
+// with a switch per network, or side by side.
+function renderCompareMaps(c) {
+
+    renderMapControls();
+
+    const el = document.getElementById("compareMaps");
+
+    el.textContent = "";
+    el.classList.toggle("single", state.mapMode === "overlay");
+
+    const xs = c.area.ring.map(p => p[0]);
+    const ys = c.area.ring.map(p => p[1]);
+    const pad = Math.max(...xs) - Math.min(...xs);
+    const box = [
+        Math.min(...xs) - pad * 0.02,
+        Math.min(...ys) - pad * 0.02,
+        Math.max(...xs) - Math.min(...xs) + pad * 0.04,
+        Math.max(...ys) - Math.min(...ys) + pad * 0.04
+    ];
+
+    const ring = "M" + c.area.ring.map(p => p.join(",")).join("L") + "Z";
+
+    const panel = (title, color, series) => {
+
+        const div = document.createElement("div");
+        div.className = "map-panel";
+
+        const h = document.createElement("h3");
+        h.textContent = title;
+        if (color) {
+            h.style.color = color;
+        }
+        div.appendChild(h);
+
+        const svg = d3.select(div)
+            .append("svg")
+            .attr("viewBox", box.join(" "))
+            .attr("role", "img")
+            .attr("aria-label", `${title}: road network`);
+
+        svg.append("path").attr("class", "city").attr("d", ring);
+
+        // Real first, so the plan is drawn on top of it.
+        for (const s of series) {
+            drawNetwork(svg, c[s.key], s.color);
+        }
+
+        for (const s of series) {
+            div.appendChild(networkCaption(c, s));
+        }
+
+        el.appendChild(div);
+    };
+
+    if (state.mapMode === "overlay") {
+
+        const shown = COMPARE_SERIES.filter(s => state.mapShow[s.key]);
+
+        panel(
+            shown.length === 2 ? "Real roads and plan"
+                : shown.length ? shown[0].label : "Nothing switched on",
+            null,
+            shown
+        );
+
+    } else {
+
+        for (const s of COMPARE_SERIES) {
+            panel(s.label, s.color, [s]);
+        }
+    }
+}
+
+function drawNetwork(svg, side, color) {
+
+    let minor = "";
+    let major = "";
+
+    for (let i = 0; i + 5 <= side.lines.length; i += 5) {
+        const [x1, y1, x2, y2, big] = side.lines.slice(i, i + 5);
+        const d = `M${x1},${y1}L${x2},${y2}`;
+        if (big) {
+            major += d;
+        } else {
+            minor += d;
+        }
+    }
+
+    svg.append("path")
+        .attr("class", "net")
+        .attr("d", minor)
+        .style("stroke", color)
+        .style("stroke-width", 1);
+
+    svg.append("path")
+        .attr("class", "net")
+        .attr("d", major)
+        .style("stroke", color)
+        .style("stroke-width", 2.4);
+}
+
+function networkCaption(c, series) {
+
+    const st = c[series.key].stats;
+    const blocks = compareRaw(series.key, "blocks");
+
+    const p = document.createElement("p");
+    p.className = "caption";
+
+    const key = document.createElement("span");
+    key.style.color = series.color;
+    key.textContent = `${series.label}: `;
+
+    p.append(
+        key,
+        `${kmLabel(c, st.length)} of road · ${st.junctions} intersections · ` +
+        `${st.deadEnds} dead ends · ${blocks} enclosed blocks` +
+        (st.cutEnds ? ` · ${st.cutEnds} roads cut at the city edge` : "")
+    );
+
+    return p;
+}
+
+// Overlay / side by side, and in overlay a switch per network.
+function renderMapControls() {
+
+    const el = document.getElementById("compareMapControls");
+
+    el.textContent = "";
+
+    const seg = document.createElement("span");
+    seg.className = "seg";
+
+    for (const [mode, label] of [["overlay", "Overlay"], ["split", "Side by side"]]) {
+
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.setAttribute("aria-pressed", String(state.mapMode === mode));
+        b.addEventListener("click", () => {
+            state.mapMode = mode;
+            render();
+        });
+        seg.appendChild(b);
+    }
+
+    el.appendChild(seg);
+
+    if (state.mapMode !== "overlay") {
+        return;
+    }
+
+    for (const s of COMPARE_SERIES) {
+
+        const label = document.createElement("label");
+        label.className = "toggle";
+
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = state.mapShow[s.key];
+        box.addEventListener("change", () => {
+            state.mapShow[s.key] = box.checked;
+            render();
+        });
+
+        const key = document.createElement("span");
+        key.className = "key";
+        key.style.background = s.color;
+
+        label.append(box, key, s.label);
+        el.appendChild(label);
+    }
+}
+
+
+function renderCompareTable(c) {
+
+    const table = document.getElementById("compareTable");
+
+    table.textContent = "";
+
+    const mpp = c.area.metresPerPixel;
+
+    const head = table.createTHead().insertRow();
+
+    for (const h of ["Metric", "How it is scored", "Weight", "Real roads", "Plan", "Plan − real"]) {
+        const th = document.createElement("th");
+        th.textContent = h;
+        head.appendChild(th);
+    }
+
+    const body = table.createTBody();
+
+    const diffCell = (row, d) => {
+        const td = row.insertCell();
+        const span = document.createElement("span");
+        span.className = "diff" + (Math.abs(d) >= 0.0005 ? (d > 0 ? " up" : " down") : "");
+        span.textContent = fmtSigned(d);
+        td.appendChild(span);
+    };
+
+    const groupRow = (label, key) => {
+
+        const row = body.insertRow();
+        row.className = "group";
+
+        const td = row.insertCell();
+        td.colSpan = 3;
+        td.textContent = label;
+
+        for (const s of ["real", "plan"]) {
+            const cell = row.insertCell();
+            cell.textContent = fmt3(c[s].point[key]);
+            cell.style.textAlign = "right";
+        }
+
+        diffCell(row, c.plan.point[key] - c.real.point[key]);
+    };
+
+    for (const group of ["nc", "rs", "bb"]) {
+
+        groupRow(`${GROUP_NAMES[group]} · ${Math.round(c.weights[group] * 100)}% of structure`, group);
+
+        for (const def of c.metrics.filter(d => d.group === group)) {
+
+            const row = body.insertRow();
+
+            row.insertCell().textContent = def.label;
+
+            const rule = row.insertCell();
+            rule.className = "text";
+            rule.textContent = def.rule;
+
+            row.insertCell().textContent = `${Math.round(def.weight * 100)}%`;
+
+            for (const s of ["real", "plan"]) {
+
+                const td = row.insertCell();
+
+                td.append(formatRaw(def.unit, compareRaw(s, def.raw), mpp));
+
+                const sc = document.createElement("span");
+                sc.className = "score";
+                sc.textContent = fmt2(compareScore(s, def.key));
+                td.appendChild(sc);
+            }
+
+            diffCell(row, compareScore("plan", def.key) - compareScore("real", def.key));
+        }
+    }
+
+    groupRow("Structure (weighted NC + RS + BB)", "structural");
+    groupRow(`Q = structure − ${c.costWeight} × cost`, "Q");
+
+    // Cost: lower is shorter, so the difference is not coloured.
+    const row = body.insertRow();
+    row.className = "group";
+    const td = row.insertCell();
+    td.colSpan = 3;
+    td.textContent = "Cost (road length ÷ the plan's starting network)";
+    for (const s of ["real", "plan"]) {
+        const cell = row.insertCell();
+        cell.textContent = fmt3(c[s].point.cost);
+        cell.style.textAlign = "right";
+    }
+    row.insertCell().textContent = fmtSigned(c.plan.point.cost - c.real.point.cost);
+}
+
+
+function renderCompareNotes(c) {
+
+    const el = document.getElementById("compareNotes");
+
+    el.textContent = "";
+
+    const n = c.notes;
+    const pct = v => `${Math.round(v * 100)}%`;
+
+    const mpp = c.area.metresPerPixel;
+    const ha = px2 => d3.format(".1f")(px2 * mpp * mpp / 10000);
+    const realSpacing = 1 / compareRaw("real", "junctionsPerLength") * mpp;
+
+    const lines = [
+        `Scale: the plan's blocks are spaced R = ${Math.round(c.area.R * mpp)} m apart and it ` +
+        `aims for a junction every ${Math.round(1.5 * c.area.R * mpp)} m of road. The real roads ` +
+        `have one every ${Math.round(realSpacing)} m, and their blocks average ` +
+        `${ha(compareRaw("real", "meanBlockArea"))} ha against the plan's ` +
+        `${ha(compareRaw("plan", "meanBlockArea"))} ha. Junction spacing, block area and cost are ` +
+        "judged at the plan's scale, so a finer real network scores low on them for being finer, " +
+        "not necessarily worse, and Q (which subtracts cost) mostly says how much road each has. " +
+        "Structure is the fairer single number; to compare like for like, lower R until the " +
+        "plan's blocks match the real ones.",
+        `Real roads: © OpenStreetMap contributors (ODbL), data of ${c.source.date} ` +
+        `(${c.source.files.join(", ")}). Road classes: ${c.source.classes.join(", ")}. ` +
+        "Service roads (driveways, parking aisles), tracks and paths are left out.",
+        "Both networks are clipped to the city boundary and scored by the planner's own quality " +
+        `model with the run's weights (NC ${pct(c.weights.nc)}, RS ${pct(c.weights.rs)}, ` +
+        `BB ${pct(c.weights.bb)}), λ ${c.costWeight}, block-size and Shimbel references and ` +
+        "starting road length, so the same yardstick applies to both.",
+        "Each network picks its own trip origins for RS the same way (its 16 farthest-apart " +
+        "intersections). The plan is scored without its facility spurs, so its numbers differ " +
+        "slightly from the Final column of the run view.",
+        `${c.real.stats.cutEnds} real roads leave the city; where they are cut at the boundary ` +
+        "is not counted as a dead end (or as a node for NC).",
+        `${n.crossings} places where two real roads cross without a shared node (flyovers, ` +
+        "bridges, tunnels or mapping gaps) were given a node, because blocks (BB) need a planar " +
+        "network. Routes may therefore turn there, which the real road may not allow.",
+        n.droppedPieces
+            ? `${n.droppedPieces} real pieces (${kmLabel(c, n.droppedLength)}) not connected to the ` +
+              "main network inside the city were left out; the plan is one network too."
+            : "The real roads inside the city form one network.",
+        "Real blocks cut by the city edge are open (they would close outside the area), so BB " +
+        "counts only blocks enclosed inside the city. The plan has roads along its edge, which " +
+        "close its edge blocks.",
+        "Shape points of real roads were thinned to within 0.5 px of the original line " +
+        `(${d3.format(".1f")(0.5 * c.area.metresPerPixel)} m), keeping bends.`
+    ];
+
+    for (const text of lines) {
+        const li = document.createElement("li");
+        li.textContent = text;
+        el.appendChild(li);
     }
 }
 

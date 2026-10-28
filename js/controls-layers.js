@@ -28,6 +28,19 @@ urquhartToggle.addEventListener(
 );
 
 
+realRoadsToggle.addEventListener(
+    "change",
+    () => {
+
+        showRealRoads();
+
+        if (!realRoadsToggle.checked) {
+            logStep("Real roads hidden.");
+        }
+    }
+);
+
+
 buildingsToggle.addEventListener(
     "change",
     () => {

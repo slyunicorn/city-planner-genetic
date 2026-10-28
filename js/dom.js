@@ -26,6 +26,7 @@ const vertexLayer = d3.select("#vertexLayer");
 const landCoverCellLayer = d3.select("#landCoverCellLayer");
 const densityLayer = d3.select("#densityLayer");
 const buildingLayer = d3.select("#buildingLayer");
+const realRoadLayer = d3.select("#realRoadLayer");
 
 const cityClipPath = d3.select("#cityClipPath");
 
@@ -106,6 +107,10 @@ const costWeightSlider = document.getElementById("costWeightSlider");
 const costWeightValue = document.getElementById("costWeightValue");
 const simplifyBtn = document.getElementById("simplifyBtn");
 const metricsPageBtn = document.getElementById("metricsPageBtn");
+const metricsWindow = document.getElementById("metricsWindow");
+const metricsFrame = document.getElementById("metricsFrame");
+const realRoadsToggle = document.getElementById("realRoadsToggle");
+const realRoadsNote = document.getElementById("realRoadsNote");
 
 const maxSlopeInput = document.getElementById("maxSlopeInput");
 const riverBufferInput = document.getElementById("riverBufferInput");

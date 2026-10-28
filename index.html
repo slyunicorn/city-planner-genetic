@@ -24,12 +24,16 @@
                 <clipPath id="cityClip">
                     <path id="cityClipPath"></path>
                 </clipPath>
+                <clipPath id="worldClip">
+                    <rect id="worldClipRect"></rect>
+                </clipPath>
             </defs>
 
             <g id="voronoiLayer"></g>
             <g id="landCoverCellLayer"></g>
             <g id="densityLayer"></g>
             <g id="buildingLayer"></g>
+            <g id="realRoadLayer"></g>
             <g id="urquhartLayer"></g>
             <g id="boundaryLayer"></g>
             <g id="pointLayer"></g>
@@ -566,12 +570,14 @@
             </div>
 
             <button id="metricsPageBtn" class="ghost">
-                Open metrics page
+                Show metrics window
             </button>
 
             <div class="hint indent">
                 Charts and tables of every quality metric, live
-                while Simplify runs, in a separate tab.
+                while Simplify runs, plus the real roads compared
+                with the plan. It opens over the map in this tab:
+                a run pauses while its tab is in the background.
             </div>
 
             <div id="roadStats">Enable the Building Network layer to measure.</div>
@@ -613,6 +619,13 @@
         </label>
 
         <label class="checkbox-row">
+            <input id="realRoadsToggle" type="checkbox">
+            Real roads (OpenStreetMap)
+        </label>
+
+        <div id="realRoadsNote" class="layer-note" hidden></div>
+
+        <label class="checkbox-row">
             <input id="buildingsToggle" type="checkbox" checked>
             Buildings
         </label>
@@ -643,6 +656,21 @@
         </div>
 
     </div>
+
+</div>
+
+
+<div id="metricsWindow" hidden>
+
+    <div id="metricsWindow-header">
+        <span>Road metrics</span>
+        <span class="window-actions">
+            <button id="metricsTabBtn" type="button" title="Open the metrics in their own browser tab">Open in tab</button>
+            <button id="metricsCloseBtn" type="button" aria-label="Close the metrics window">&times;</button>
+        </span>
+    </div>
+
+    <iframe id="metricsFrame" title="Road metrics"></iframe>
 
 </div>
 
@@ -693,6 +721,7 @@
 <script src="js/roads-simplify.js"></script>
 <script src="js/roads-quality.js"></script>
 <script src="js/metrics-feed.js"></script>
+<script src="js/real-roads.js"></script>
 <script src="js/roads-junctions.js"></script>
 <script src="js/roads-stepwise.js"></script>
 <script src="js/roads-straighten.js"></script>

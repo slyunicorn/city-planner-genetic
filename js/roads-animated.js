@@ -137,6 +137,10 @@ function runRoadSimplification() {
 
     base.qualityStart = startState.current;
 
+    // Kept for "Real roads vs plan" (real-roads.js): the same
+    // weights, references and starting length score both networks.
+    base.qualityRefs = { ctx: qualityCtx, baseTotalLength };
+
     // Counted per run, for the metrics page.
     removalRejections = { disconnect: 0, required: 0, access: 0, accepted: 0 };
 

@@ -126,7 +126,7 @@ simplifyBtn.addEventListener(
 
 metricsPageBtn.addEventListener(
     "click",
-    openMetricsPage
+    () => showMetricsWindow()
 );
 
 

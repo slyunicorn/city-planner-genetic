@@ -4,7 +4,9 @@ Local server for the AI City Planner.
 
 Serves the app (like `python3 -m http.server`) and builds OpenStreetMap
 land cover on demand, so the browser gets land cover automatically even
-when ESA / Esri / Overpass are blocked:
+when ESA / Esri / Overpass are blocked. It also cuts out the real road
+network of an area (/api/roads/..., tools/osm_roads.py) for the metrics
+page's "Real roads vs plan" comparison.
 
   1. The app sends the bbox of the terrain it just loaded.
   2. The smallest Geofabrik region covering it is picked from
@@ -38,6 +40,7 @@ from shapely.geometry import box, shape
 from shapely.prepared import prep
 
 import osm_landcover
+import osm_roads
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +58,9 @@ MAX_BBOX_DEG = 3.0
 # Bump when the raster format, classes or feature selection change, to
 # ignore old cache files. 2: ways picked by bounding box (way index).
 CACHE_VERSION = "2"
+
+# Same, for the road extracts (road classes, JSON format).
+ROADS_CACHE_VERSION = "1"
 
 
 jobs = {}
@@ -154,15 +160,25 @@ def region_paths(region):
             os.path.join(DATA, f"{name}-landcover.osm.pbf"))
 
 
+def roads_path(region):
+    return os.path.join(DATA, f"{region['id'].replace('/', '_')}-roads.osm.pbf")
+
+
 def is_ready(region):
     return os.path.exists(region_paths(region)[1])
+
+
+# Roads can be cut from a prepared roads copy, or from the raw extract
+# without downloading anything.
+def roads_ready(region):
+    return os.path.exists(roads_path(region)) or os.path.exists(region_paths(region)[0])
 
 
 def children(region):
     return [r for r in load_regions() if r["parent"] == region["id"]]
 
 
-def resolve_regions(region, area):
+def resolve_regions(region, area, ready=is_ready):
     """
     Regions whose data together cover `area` inside `region`, preferring
     ones already prepared on disk. An area on the border of two Indian
@@ -171,7 +187,7 @@ def resolve_regions(region, area):
     sub-regions can do the job.
     """
 
-    if is_ready(region):
+    if ready(region):
         return [region]
 
     part = area.intersection(region["shape"])
@@ -188,13 +204,15 @@ def resolve_regions(region, area):
 
     out = []
     for k in kids:
-        out += resolve_regions(k, area)
+        out += resolve_regions(k, area, ready)
     return out
 
 
-def ensure_pbf(region, job):
+def ensure_raw(region, job):
+    """The region's raw Geofabrik extract, downloaded the first time."""
+
     name = region["id"].replace("/", "_")
-    path, filtered = region_paths(region)
+    path = region_paths(region)[0]
 
     if not os.path.exists(path):
         curl(region["url"], path, job, f"OSM extract '{region['name']}'")
@@ -214,8 +232,15 @@ def ensure_pbf(region, job):
         except urllib.error.URLError:
             pass
 
+    return path
+
+
+def ensure_pbf(region, job):
+    filtered = region_paths(region)[1]
+
     # One-time land-cover-only copy: area builds scan ~8x less data.
     if not os.path.exists(filtered):
+        path = ensure_raw(region, job)
         job_message(job, f"Preparing '{region['name']}' for fast lookups "
                          "(one time per region, about 2 min)")
         osm_landcover.filter_pbf(path, filtered, log=lambda s: print("[landcover]", s))
@@ -225,6 +250,22 @@ def ensure_pbf(region, job):
         osm_landcover.prepare_way_index(filtered, log=lambda s: print("[landcover]", s))
 
     return filtered
+
+
+def ensure_roads_pbf(region, job):
+    roads = roads_path(region)
+
+    # One-time roads-only copy, indexed like the land cover one.
+    if not os.path.exists(roads):
+        path = ensure_raw(region, job)
+        job_message(job, f"Preparing the roads of '{region['name']}' "
+                         "(one time per region, a few minutes)")
+        osm_roads.filter_roads_pbf(path, roads, log=lambda s: print("[roads]", s))
+        job_message(job, f"Indexing the roads of '{region['name']}' (one time per region)")
+        osm_landcover.way_index(roads, set(), log=lambda s: print("[roads]", s),
+                                keep=osm_roads.is_road)
+
+    return roads
 
 
 # ------------------------------------------------------------
@@ -237,8 +278,12 @@ def job_message(job, msg):
         print("\r  " + job["message"].ljust(70), end="", flush=True)
 
 
-def cache_path(bbox):
-    key = CACHE_VERSION + ":" + ",".join(f"{v:.4f}" for v in bbox)
+def cache_path(bbox, kind="landcover"):
+    coords = ",".join(f"{v:.4f}" for v in bbox)
+    if kind == "roads":
+        key = f"roads{ROADS_CACHE_VERSION}:{coords}"
+        return os.path.join(CACHE, hashlib.sha1(key.encode()).hexdigest()[:16] + ".roads.json")
+    key = CACHE_VERSION + ":" + coords
     return os.path.join(CACHE, hashlib.sha1(key.encode()).hexdigest()[:16] + ".tif")
 
 
@@ -256,21 +301,27 @@ def run_job(job):
                 raise osm_landcover.Cancelled()
 
             if not os.path.exists(out):
+                kind = job["kind"]
                 job_message(job, "Finding the OSM region for this area")
-                regions = resolve_regions(pick_region(bbox), box(*bbox))
-                print(f"[landcover] {fmt_bbox(bbox)} -> Geofabrik "
+                regions = resolve_regions(pick_region(bbox), box(*bbox),
+                                          roads_ready if kind == "roads" else is_ready)
+                print(f"[{kind}] {fmt_bbox(bbox)} -> Geofabrik "
                       + ", ".join(f"'{r['id']}'" for r in regions))
 
-                pbf = [ensure_pbf(r, job) for r in regions]
-
                 def log(line):
-                    print("[landcover]", line)
+                    print(f"[{kind}]", line)
                     job_message(job, line)
 
-                tmp = out[:-4] + ".tmp.tif"
-                osm_landcover.build_landcover(
-                    pbf, bbox, tmp, log=log, should_stop=lambda: job["cancel"])
-                os.replace(tmp, out)
+                if kind == "roads":
+                    pbf = [ensure_roads_pbf(r, job) for r in regions]
+                    osm_roads.build_roads(
+                        pbf, bbox, out, log=log, should_stop=lambda: job["cancel"])
+                else:
+                    pbf = [ensure_pbf(r, job) for r in regions]
+                    tmp = out[:-4] + ".tmp.tif"
+                    osm_landcover.build_landcover(
+                        pbf, bbox, tmp, log=log, should_stop=lambda: job["cancel"])
+                    os.replace(tmp, out)
         finally:
             build_lock.release()
 
@@ -278,7 +329,7 @@ def run_job(job):
         job_message(job, "Done")
 
     except osm_landcover.Cancelled:
-        print(f"[landcover] cancelled {fmt_bbox(bbox)} (newer area requested)")
+        print(f"[{job['kind']}] cancelled {fmt_bbox(bbox)} (newer area requested)")
         job["state"] = "error"
         job_message(job, "cancelled: a newer area was requested")
 
@@ -312,20 +363,21 @@ def prefetch(region_id):
             # Regions prepared before the way index existed get one now.
             osm_landcover.prepare_way_index(region_paths(r)[1],
                                             log=lambda s: print("[landcover]", s))
-            print("  already prepared")
-            continue
-        ensure_pbf(r, {"console": True})
-        print(f"\r  ready: {os.path.basename(region_paths(r)[1])}".ljust(72))
+        else:
+            ensure_pbf(r, {"console": True})
+        ensure_roads_pbf(r, {"console": True})
+        print(f"\r  ready: {os.path.basename(region_paths(r)[1])}, "
+              f"{os.path.basename(roads_path(r))}".ljust(72))
 
-    print("All prepared. Land cover for these areas now needs no downloads.")
+    print("All prepared. Land cover and roads for these areas now need no downloads.")
 
 
 def fmt_bbox(b):
     return f"W {b[0]:.4f} S {b[1]:.4f} E {b[2]:.4f} N {b[3]:.4f}"
 
 
-def start_job(bbox):
-    out = cache_path(bbox)
+def start_job(bbox, kind="landcover"):
+    out = cache_path(bbox, kind)
 
     with jobs_lock:
         # Same area already being built: share that job.
@@ -334,12 +386,12 @@ def start_job(bbox):
                 return job
 
         # The app only ever wants its newest area; stop older builds
-        # so this one does not queue behind them.
+        # of the same kind so this one does not queue behind them.
         for old in jobs.values():
-            if old["state"] == "running":
+            if old["state"] == "running" and old["kind"] == kind:
                 old["cancel"] = True
 
-        job = {"id": uuid.uuid4().hex, "bbox": bbox, "file": out,
+        job = {"id": uuid.uuid4().hex, "kind": kind, "bbox": bbox, "file": out,
                "state": "running", "message": "Starting", "cancel": False}
         jobs[job["id"]] = job
 
@@ -364,7 +416,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def log_message(self, fmt, *args):
-        if "/api/landcover/status" not in self.path:
+        if "/status?" not in self.path:
             super().log_message(fmt, *args)
 
     def send_json(self, obj, code=200):
@@ -387,30 +439,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if url.path == "/api/health":
                 return self.send_json({"ok": True})
 
-            if url.path == "/api/landcover/start":
+            # /api/landcover/... (GeoTIFF) and /api/roads/... (JSON)
+            parts = url.path.split("/")
+            kind = parts[2] if len(parts) == 4 else ""
+            action = parts[3] if len(parts) == 4 else ""
+
+            if kind not in ("landcover", "roads"):
+                return self.send_json({"error": "not found"}, 404)
+
+            if action == "start":
                 bbox = tuple(float(q[k]) for k in ("west", "south", "east", "north"))
                 w, s, e, n = bbox
                 if not (-180 <= w < e <= 180 and -85 <= s < n <= 85):
                     return self.send_json({"error": "bad bbox"}, 400)
                 if e - w > MAX_BBOX_DEG or n - s > MAX_BBOX_DEG:
                     return self.send_json({"error": "area too large"}, 400)
-                job = start_job(bbox)
+                job = start_job(bbox, kind)
                 return self.send_json({"id": job["id"]})
 
             job = jobs.get(q.get("id", ""))
-            if not job:
+            if not job or job["kind"] != kind:
                 return self.send_json({"error": "unknown job"}, 404)
 
-            if url.path == "/api/landcover/status":
+            if action == "status":
                 return self.send_json({"state": job["state"], "message": job["message"]})
 
-            if url.path == "/api/landcover/result":
+            if action == "result":
                 if job["state"] != "done":
                     return self.send_json({"error": "not ready"}, 409)
                 with open(job["file"], "rb") as f:
                     body = f.read()
                 self.send_response(200)
-                self.send_header("Content-Type", "image/tiff")
+                self.send_header("Content-Type",
+                                 "application/json" if kind == "roads" else "image/tiff")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)

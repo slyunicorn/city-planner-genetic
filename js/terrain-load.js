@@ -129,6 +129,7 @@ async function loadTerrainFromControls() {
     // A new area invalidates any land cover already fetched for
     // the old one, including a fetch still running in the background.
     landCoverRequestId++;
+    resetRealRoads();
     loadLandCoverBtn.disabled = false;
     habMask = null;
     landCoverEquirectCache = null;
@@ -187,6 +188,10 @@ async function loadTerrainFromControls() {
         // background: its sources can take minutes to time out,
         // and Load Terrain must not stay locked meanwhile.
         loadLandCoverFromControls();
+
+        if (realRoadsToggle.checked) {
+            showRealRoads();
+        }
 
     } catch (err) {
 
